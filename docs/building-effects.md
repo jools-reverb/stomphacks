@@ -8,8 +8,8 @@ effect:
 .venv/bin/python3 tools/zd2_make_effect.py effects/gain/manifest.json
 ```
 
-Output lands in `effects/gain/build/`: the upload pair (`DIYGAIN.ZD2` +
-`DIYGAIN.ZIC`), review disassemblies, and a `REPORT.md` whose checks must ALL pass
+Output lands in `effects/gain/build/`: the upload pair (`XXGAIN.ZD2` +
+`XXGAIN.ZIC`), review disassemblies, and a `REPORT.md` whose checks must ALL pass
 before the effect goes near a pedal.
 
 The pipeline generates everything around your kernel: the entry stub, init,
@@ -40,8 +40,15 @@ No stock effect file is needed, and none ships here.
 ```json
 {
   "name": "MyEffect",        // catalogue name, 10 chars or less
-  "filename": "MYEFFECT",    // pedal flash filename, 8 chars of A-Z 0-9 _
-  "id": "07000f70",          // your effect ID, see effect-ids.md
+  "filename": "XXEFFECT",    // pedal flash filename, 8 chars of A-Z 0-9 _.
+                             // The first 2 are a namespace prefix: XX for
+                             // playground builds, or your registered author
+                             // prefix (id-scheme.md). The build enforces it.
+  "id": "07001040",          // your effect ID, see effect-ids.md
+  "author": "your_nickname", // your row in ids/effect-authors.json. Leave
+                             // this line out until you have one: a
+                             // playground build with an XX filename does
+                             // not need it.
   "version": "1.00",
   "display": "MY EFFECT",    // the text drawn on the icon. The name field is
                              // NOT what the pedal shows you.
@@ -63,8 +70,19 @@ No stock effect file is needed, and none ships here.
 }
 ```
 
-One to twelve knobs, in UI order (the pedal pages 4 knobs across up to 3
-pages). Pick the id per [effect-ids.md](effect-ids.md).
+One to ten knobs, in UI order (the pedal pages 4 knobs across up to 3
+pages). The build hands the knobs coefficient slots 5 to 14 in order; it keeps
+slots 2 and 3 out of that order on purpose, because the pedal firmware writes
+a zero into slot 3 every time the tuner closes (a knob living there would
+silently lose its setting after any tuner use) and slot 2 is the stock
+output-level convention. A manifest can still ask for one of those two with
+an explicit `"slot"`, and the build prints a warning when it does. Pick the
+id per [effect-ids.md](effect-ids.md), and the filename per
+the prefix convention in [id-scheme.md](id-scheme.md): 2 prefix letters plus
+up to 6 name characters, XX for playground builds, your registered author
+prefix for effects you release. The build refuses a filename that does not
+match its author and id, so a copied example fails loudly instead of
+colliding silently with someone else's effect on the pedal.
 
 About `dspload`: every effect declares a DSP load number, and the pedal trusts
 it completely. It sums the DECLARED values of a patch and refuses to add an
@@ -76,11 +94,71 @@ The less common keys:
 
 | Key | What it does |
 |---|---|
+| values: ["A", "B"] | (on a param) Makes the knob a selector: the pedal renders these labels instead of an integer. 5 chars or less displays fully. The wfsplit/wfswap/wfmerge manifests show it in use. |
 | kernel_section: "text" | Put the kernel in .text instead of the 1472-byte .audio section. For big kernels. Stock-precedented: the big stock reverbs run entirely from .text. Budget 16 KB. |
 | allow_stack: true | Let the kernel use the stack and callee-saved registers. Stock-precedented. Calls are still banned, and this needs opt_for_space: null, because any -ms level makes the compiler CALL a save helper. |
 | opt_for_space: 3 | The default. Plain -O2 (null) unrolls hard, and a kernel can quintuple in size and blow the .audio budget. |
 | init_edit_calls: true | The default. Keep it. Init calls every edit handler, which is how your knob values survive the init re-run the firmware does on EVERY chain edit. Without it, knobs silently revert to defaults whenever the user edits the chain. |
 | strip: true | The default. The shipped blob loses its debug symbols, which are 40% of the file and which the loader never reads. |
+| footswitch: {} | Opt into the firmware's momentary footswitch mode. See [Footswitch](#footswitch-momentary-unlatch-mode) below. |
+
+## Footswitch: momentary (UNLATCH) mode
+
+The footswitch is normally a latch: tap on, tap off. The firmware also has a
+momentary mode, where the effect is ON only while the switch is held. Stock
+effects like EXCITER expose it as a trailing ON/OFF parameter whose values
+render LATCH / UnLATCH. The whole feature is firmware-owned: your kernel only
+ever sees the bypass crossfade ramping in `coeff[SH_COEFF_BYPASS]` and cannot
+tell a tap from a hold, so a kernel that handles bypass correctly gets
+momentary for free.
+
+Opting in takes a top-level `footswitch` block plus one trailing toggle
+param (hardware-validated on an MS-70CDR+, 2026-07-25):
+
+```json
+"footswitch": {},
+"params": [
+  { "name": "Level", "max": 100, "default": 80,
+    "explanation": "..." },
+  { "name": "ON/OFF",           // the toggle: LAST param, after your knobs
+    "values": ["LATCH", "UNLATCH"],
+    "default": 0,               // LATCH: plain latching, the stock behaviour
+    "footswitch_toggle": true,  // this param is the footswitch-mode toggle
+    "trailing": true,           // shown after the knobs, not on a knob page
+    "explanation": "LATCH: press toggles. UNLATCH: on only while held." }
+]
+```
+
+The toggle must be the LAST param, `trailing: true` keeps it off the knob
+pages (the pedal shows it in the param scroll, after your knobs), and the
+`footswitch` block's defaults are the validated stock values; there is
+nothing to configure in it.
+
+The builder then emits four container pieces, found the hard way on
+hardware: the toggle param with the stock footswitch flags, the firmware
+config table wired into the caller struct, a special-function marker on the
+bypass entry, and a table-end split so the pedal's param walk reaches the
+toggle. Any one missing and the feature silently does not fire. REPORT.md
+verifies all four, and a manifest without the keys builds byte-identical to
+the pre-footswitch pipeline.
+
+On the pedal: at LATCH the footswitch is completely normal, including the
+hold-for-tuner shortcut. At UNLATCH the effect is ON only while pressed, the
+tuner shortcut is suppressed (the manual documents that), and the pedal
+draws its own UNLATCH banner across the icon. The defaults reproduce plain
+latching, so shipping the toggle on an existing effect changes nothing
+until the player selects UNLATCH.
+
+What does NOT work, hardware-proven, so you do not spend a session on it:
+folding footswitch mode into one of your normal UI selectors as a third
+value. The firmware ignores the mode flags on a UI knob, and the combined
+table shape mis-parses into a phantom parameter. The mode lives in a
+separate trailing toggle, and it is strictly two states.
+
+Momentary pairs naturally with an effect whose ON state selects something
+rather than bypasses something: the validation build was a bus merger whose
+footswitch picks between two effect groups, so UNLATCH gives
+hold-one-group, release-for-the-other switching.
 
 ## The kernel
 

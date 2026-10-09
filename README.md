@@ -14,8 +14,10 @@ None of them are theoretical.
 ## What works today
 
 The first release gave you one complete, hardware-proven effect and the safety
-tooling to install it without bricking anything. This release adds three routing
-effects on top of it, and the documentation for how they work.
+tooling to install it without bricking anything. The second added three routing
+effects and the documentation for how they work. This release is about ids and
+names, so that effects from different people can live on the same pedal, and it
+fixes a bug that reset the first knob of an effect after the tuner was used.
 
 The effect is `effects/gain/`: a level trim with a single knob (80 on the knob is
 unity gain, 100 is +3.5 dB, on the same curve as a stock Zoom VOL knob). It is
@@ -30,9 +32,8 @@ container and the icon from scratch, so nothing from a stock Zoom file enters
 the build and the result is yours to share. See
 [docs/ip-and-licensing.md](docs/ip-and-licensing.md).
 
-New in this release: `effects/wfsplit/`, `effects/wfswap/` and
-`effects/wfmerge/`, a routing family for running two independent effect
-chains on one pedal. WfSplit turns the stereo path into two mono groups (one
+The routing family is `effects/wfsplit/`, `effects/wfswap/` and
+`effects/wfmerge/`, for running two independent effect chains on one pedal. WfSplit turns the stereo path into two mono groups (one
 per input jack, or two copies of one instrument), WfSwap switches which group
 the effects after it apply to, and WfMerge brings the groups back together,
 with modes for separate outputs per group, an A/B switch on the footswitch,
@@ -45,12 +46,36 @@ carries the one hard rule (never put a stock LINE SEL in the same patch as
 the split/swap/merge family). The container format facts behind the build
 live in [docs/zd2-format.md](docs/zd2-format.md).
 
+New in this release:
+
+* Ids and names. [docs/effect-ids.md](docs/effect-ids.md) now says which ids
+  to use on your own pedal and how to get a range of your own for effects you
+  share, [docs/id-scheme.md](docs/id-scheme.md) describes the proposal behind
+  it, and [ids/effect-authors.json](ids/effect-authors.json) lists who has
+  which range. The category table covers all five MS Plus models.
+* The build tool checks the filename prefix, and refuses a name that a stock
+  effect already uses.
+* The installer reads the pedal's effect list first, and refuses an effect
+  whose id or filename is already installed.
+* The installer checks the free space on the pedal before it writes
+  anything, and refuses an install that would leave less than 100 KB free.
+  `--free-margin-kb N` sets a different margin, never below 32 KB.
+* A fix for the knob that reset after the tuner. The pedal writes a zero into
+  one coefficient slot when the tuner closes, and the build tool used to give
+  that slot to the first knob. It now uses slots 5 and up. Rebuild your
+  effects to get the fix.
+* A momentary footswitch. An effect can offer a LATCH / UNLATCH toggle, and
+  WfMerge has one. See [docs/building-effects.md](docs/building-effects.md).
+* The example effects have new ids, and the gain file is now `XXGAIN`. If the
+  earlier builds are on your pedal, uninstall them before you rebuild, while
+  you still have the build files they were installed from.
+
 The gain is still the place to start if you want to write your own effect,
 and the philosophy has not changed: a small set of effects, built and
 installed the safe way.
 
 If you would rather skip the toolchain entirely: one-click install of shared
-effects at https://sym.bios.is, launching soon.
+effects at https://sym.bios.is.
 
 ## Getting started
 
@@ -83,6 +108,17 @@ You need:
   and write the ZD2 file format, the pedal scripts use it for the MIDI
   transfers, and both import it from there.
 
+  The clone needs one fix that is not merged upstream yet,
+  [pull request 112](https://github.com/mungewell/zoom-zt2/pull/112). Without
+  it, listing the files on the pedal can stop early, without an error, at a
+  file with a 12-character name (the pedal's own effect list, `FLST_SEQ.ZT2`,
+  is one), so a backup can end up incomplete. Apply it in the clone:
+
+  ```
+  git -C zoom-zt2 fetch origin pull/112/head
+  git -C zoom-zt2 cherry-pick -n FETCH_HEAD
+  ```
+
 ## Build the gain effect
 
 One command turns the manifest and the C kernel into an installable effect:
@@ -91,8 +127,8 @@ One command turns the manifest and the C kernel into an installable effect:
 .venv/bin/python3 tools/zd2_make_effect.py effects/gain/manifest.json
 ```
 
-The output lands in `effects/gain/build/`: the upload pair `DIYGAIN.ZD2` and
-`DIYGAIN.ZIC` (the effect and its icon), and a `REPORT.md`. Every check in
+The output lands in `effects/gain/build/`: the upload pair `XXGAIN.ZD2` and
+`XXGAIN.ZIC` (the effect and its icon), and a `REPORT.md`. Every check in
 `REPORT.md` must pass before the effect goes anywhere near a pedal. That report
 is the gate between a green build and hardware.
 
@@ -133,15 +169,15 @@ next.
    why, without touching the pedal:
 
    ```
-   .venv/bin/python3 tools-pedal/pedal_diy.py install effects/gain/build/DIYGAIN.ZD2
+   .venv/bin/python3 tools-pedal/pedal_diy.py install effects/gain/build/XXGAIN.ZD2
    ```
 
 4. Read it back and compare it byte for byte against the exact file you uploaded
    (a fresh rebuild will differ - SAFETY.md explains why):
 
    ```
-   .venv/bin/python3 tools-pedal/readback.py DIYGAIN.ZD2 session/DIYGAIN-back.ZD2
-   cmp effects/gain/build/DIYGAIN.ZD2 session/DIYGAIN-back.ZD2
+   .venv/bin/python3 tools-pedal/readback.py XXGAIN.ZD2 session/XXGAIN-back.ZD2
+   cmp effects/gain/build/XXGAIN.ZD2 session/XXGAIN-back.ZD2
    ```
 
 5. Load DIY Gain into a SCRATCH patch (the current temporary patch, not saved to a patch memory), play through it, and NEVER save. If anything
@@ -153,7 +189,7 @@ next.
    trust on the pedal:
 
    ```
-   .venv/bin/python3 tools-pedal/pedal_diy.py uninstall effects/gain/build/DIYGAIN.ZD2
+   .venv/bin/python3 tools-pedal/pedal_diy.py uninstall effects/gain/build/XXGAIN.ZD2
    ```
 
 SAFETY.md has the full procedure, the reasoning behind each step, and what to do

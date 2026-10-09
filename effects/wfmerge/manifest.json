@@ -1,15 +1,17 @@
 {
   "name": "WfMerge",
   "filename": "WFMERGE",
-  "id": "07000f15",
-  "version": "2.03",
+  "id": "07001020",
+  "author": "waveformer",
+  "version": "2.04",
   "display": "MERGE",
   "badge": "WF",
-  "description": "Bus merger, the routing-family chain tail: recombines the Main and AUX buses and always clears AUX. Mode DUAL or SWAP assigns the two paths to the output jacks (SWAP crossed, required after a WfSwap); MIX sums them on the Main and AUX levels. FtSw A/B turns the footswitch into a seamless A/B selector between the two paths. Original effect by Waveformer.",
+  "description": "Bus merger, the routing-family chain tail: recombines the Main and AUX buses and always clears AUX. Mode DUAL or SWAP assigns the two paths to the output jacks (SWAP crossed, required after a WfSwap); MIX sums them on the Main and AUX levels. FtSw A/B turns the footswitch into a seamless A/B selector between the two paths. The ON/OFF toggle sets the footswitch mode: LATCH (press to toggle and stay) or UNLATCH (momentary, active only while held); UNLATCH with FtSw A/B gives momentary group switching (hold for group A, release for group B). Original effect by Waveformer.",
   "dspload": 13.94,
   "kernel": "wfmerge.c",
   "state_bytes": 32,
   "scaffold": "cleanroom",
+  "footswitch": { "sub_word": 256, "slot": 0 },
   "params": [
     {
       "name": "Mode",
@@ -41,6 +43,17 @@
       ],
       "default": 0,
       "explanation": "BYP: the footswitch bypasses normally. A/B: it selects which path you hear, as a seamless crossfade."
+    },
+    {
+      "name": "ON/OFF",
+      "values": [
+        "LATCH",
+        "UNLATCH"
+      ],
+      "default": 0,
+      "footswitch_toggle": true,
+      "trailing": true,
+      "explanation": "Footswitch behaviour. LATCH: press toggles and stays. UNLATCH: active only while held (momentary); pair it with FtSw A/B for momentary group switching (hold for group A, release for group B). Firmware-owned; the audio kernel ignores this value."
     }
   ]
 }

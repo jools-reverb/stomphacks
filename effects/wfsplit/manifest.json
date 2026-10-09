@@ -1,7 +1,8 @@
 {
   "name": "WfSplit",
   "filename": "WFSPLIT",
-  "id": "07000f14",
+  "id": "07001010",
+  "author": "waveformer",
   "version": "2.02",
   "display": "SPLIT",
   "badge": "WF",

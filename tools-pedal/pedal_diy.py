@@ -51,7 +51,15 @@ Usage (from the repo root):
     .venv/bin/python3 tools-pedal/pedal_diy.py writetest  <FILE.ZD2> [--dry-run]
     .venv/bin/python3 tools-pedal/pedal_diy.py classify    <FILE.ZD2>  # decision only, never touches the pedal
     .venv/bin/python3 tools-pedal/pedal_diy.py rescue      [GOOD_FLST_SEQ.ZT2] [--write-back] [--remove FILE.ZD2]
+    .venv/bin/python3 tools-pedal/pedal_diy.py --free-margin-kb 64 install <FILE.ZD2>
   Windows (Git Bash): .venv/Scripts/python.exe tools-pedal/pedal_diy.py ...
+
+`--free-margin-kb N` (first, before the subcommand; install and writetest
+only) sets how much free space must remain on the pedal after the upload,
+in KB, instead of the default 100 (file_session.UPLOAD_MARGIN). It is never
+below the floor of 32 KB (UPLOAD_MARGIN_FLOOR): a smaller N is refused
+before any pedal contact. The override is printed and logged
+(FREE-MARGIN-OVERRIDE).
 
 `--dry-run` runs every safety check and prints exactly what it would do,
 without touching the pedal. `classify` is dry-run's read-only core.
@@ -95,6 +103,10 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
 STOCK_GLOB = os.path.join(REPO_ROOT, "effects", "Zoom-*", "*.ZD2")
 STOCK_ZIC_GLOB = os.path.join(REPO_ROOT, "effects", "Zoom-*", "*.ZIC")
 LOGFILE = os.path.join(REPO_ROOT, "tools-pedal", "pedal_diy.log")
+# --free-margin-kb N: the free-space gate's margin override. A LEADING flag,
+# parsed and floor-checked before anything else. The floor lives in
+# file_session.UPLOAD_MARGIN_FLOOR and is checked before any pedal contact.
+FREE_MARGIN_FLAG = "--free-margin-kb"
 
 ID_OFF = 96            # uint32le effect id
 NAME_OFF, NAME_LEN = 100, 11   # ASCII effect name, null-padded
@@ -259,21 +271,28 @@ def is_diy_id(eid):
     """True iff eid is a DIY id this tool recognizes (never a stock id).
 
     The wrapper only ever installs or uninstalls effects whose id falls in a
-    DIY range, so it can never touch a stock effect by accident. Two ranges
-    are recognized: the DIY page 0x07000f00..0x07000fff (use this for your
-    own effects; see docs/effect-ids.md), and a second reserved block
-    (group byte 0x01..0x09 with low 24 bits 0x001000..0x0013ff).
+    DIY range, so it can never touch a stock effect by accident. The whole
+    scheme keeps byte98 (id bits 16..23) at 0; a nonzero byte98 is not
+    recognized here. Given byte98 == 0 and a category group byte
+    (0x01..0x1d), the DIY bands by low16 are:
+      - legacy DIY page   0x0f00..0x0fff  (the group-7 fleet)
+      - playground        0x1000..0x1fff  (own-pedal only, never distributed)
+      - author ranges     0x2000..0xffff  (one per author; see
+                                           docs/id-scheme.md)
+    The legacy page is matched as its full 0x07000f00..0x07000fff id.
 
-    Zoom occupies two ids inside the DIY page (LINE SEL at 0x07000f00 and
+    Zoom occupies two ids inside the legacy page (LINE SEL at 0x07000f00 and
     the pedal-resident BPM module at 0x07000ff0). This range check alone
     does not exclude them; the stock-catalog check in classify() is what
-    refuses them.
+    refuses them. That stock-collision check, not this coarse range, is the
+    real backstop against ever treating a stock id as DIY.
     """
     if 0x07000F00 <= eid <= 0x07000FFF:
         return True
     group = (eid >> 24) & 0xFF
-    low24 = eid & 0xFFFFFF
-    if 0x01 <= group <= 0x09 and 0x001000 <= low24 <= 0x0013FF:
+    byte98 = (eid >> 16) & 0xFF
+    low16 = eid & 0xFFFF
+    if byte98 == 0 and 0x01 <= group <= 0x1D and 0x1000 <= low16 <= 0xFFFF:
         return True
     return False
 
@@ -344,6 +363,55 @@ def classify(path):
     return allow, eid, name, reasons
 
 
+def check_resident_collisions(entries, base, eid):
+    """The DIY-versus-DIY install collision gate.
+
+    classify() vets the incoming effect against the STOCK catalog only;
+    this checks it against the pedal's OWN resident effect list (the FLST
+    the install just downloaded), because two DIY effects can collide with
+    each other in namespaces the stock checks never see. The pedal stores
+    effects by their 8-character flash filename, and an install over an
+    existing same-name file SILENTLY keeps the old file (SAFETY.md); the
+    transfer engine's readback-compare would catch that only late, as a
+    failed transfer. This refuses it up front, before any upload.
+    `entries` are flst_check.validate_flst() entries
+    (group, filename, version, id, installed); `base` and `eid` are the
+    incoming file's basename and id.
+
+    Returns a list of collision reasons; empty means clean. Fail-closed is
+    the CALLER's job (install dies on any reason). This gate is ADDITIVE:
+    it never relaxes any existing check. The companion icon needs no
+    separate check here: a resident effect's .ZIC name is derived from its
+    .ZD2 stem, so an icon collision implies the filename collision this
+    already refuses. Replacing your own effect stays possible via the
+    documented uninstall-first flow (uninstall removes the entry AND the
+    file, so the re-install then finds no collision)."""
+    reasons = []
+    for _group, fname, _ver, res_id, _inst in entries:
+        if fname.upper() == base.upper():
+            if res_id == eid:
+                reasons.append(
+                    "'%s' is already installed (same id 0x%08x); "
+                    "UNINSTALL FIRST to replace it (SAFETY.md): the "
+                    "pedal silently keeps the resident file on a "
+                    "same-name install" % (fname, eid))
+            else:
+                reasons.append(
+                    "filename '%s' collides with a DIFFERENT resident "
+                    "effect (resident id 0x%08x, incoming id 0x%08x); the "
+                    "pedal would silently keep the resident file. Rename "
+                    "the new effect (author-prefix convention, "
+                    "docs/id-scheme.md) or uninstall the resident effect "
+                    "first if you really mean to replace it"
+                    % (fname, res_id, eid))
+        elif res_id == eid:
+            reasons.append(
+                "id 0x%08x collides with resident effect '%s'; two "
+                "effects must never share an id (docs/id-scheme.md). "
+                "Give the new effect its own id" % (eid, fname))
+    return reasons
+
+
 def log(op, path, eid, name, decision):
     try:
         with open(LOGFILE, "a") as f:
@@ -390,13 +458,22 @@ def _compute_flst(pedal, sess, op, path, eid, name):
     flst_old = sess.download(fs.FLST_NAME)
     sess.close()
 
-    ok, problems, _ = flst_check.validate_flst(flst_old)
+    ok, problems, entries = flst_check.validate_flst(flst_old)
     if not ok:
         die("the effect list currently ON THE PEDAL does not validate - "
             "refusing to edit it (%s). Back up and investigate before any "
             "write." % "; ".join(problems), EXIT_REFUSED)
 
     base = os.path.basename(path)
+    # DIY-versus-DIY collision gate (install only; ADDITIVE, fail-closed).
+    # Uninstall is exempt by design: a colliding effect must always be
+    # REMOVABLE, exactly like the envelope gate's uninstall exemption.
+    if op == "install":
+        collisions = check_resident_collisions(entries, base, eid)
+        if collisions:
+            log(op, path, eid, name, "REFUSED-COLLISION")
+            die("refusing to install %s over the pedal's resident effects: "
+                "%s" % (base, "; ".join(collisions)), EXIT_REFUSED)
     # Grammar edits run on the canonical first 8502 bytes; the result is
     # padded back to the length of the list the pedal actually holds
     # (pad_to_native). A factory-fresh pedal's list is LARGER than the
@@ -429,7 +506,7 @@ def _compute_flst(pedal, sess, op, path, eid, name):
     return flst_old, flst_new, files
 
 
-def _execute(pedal, sess, op, path, eid, name):
+def _execute(pedal, sess, op, path, eid, name, margin=None):
     """Compute+validate the effect list, run the transfer, report. Assumes
     `sess` is already in PC mode. `pedal` is only used for its ZT2 grammar
     helpers (add_effect_from_filename). Returns an exit code. This is the
@@ -453,7 +530,8 @@ def _execute(pedal, sess, op, path, eid, name):
 
     try:
         if op == "install":
-            result = fs.install_effect(sess, files, flst_old, flst_new)
+            result = fs.install_effect(sess, files, flst_old, flst_new,
+                                       margin=margin)
         else:
             result = fs.uninstall_effect(sess, [base, zic_base],
                                          flst_old, flst_new)
@@ -490,8 +568,10 @@ def _execute(pedal, sess, op, path, eid, name):
     return EXIT_OK
 
 
-def _run_transfer(op, path, eid, name):
-    """The single-connection transfer. Returns an exit code."""
+def _run_transfer(op, path, eid, name, margin=None):
+    """The single-connection transfer. Returns an exit code. `margin` is
+    the free-space override in bytes (None = the default), floor-checked
+    by main() and again by the engine."""
     import file_session as fs
 
     pedal = _connect()
@@ -501,14 +581,14 @@ def _run_transfer(op, path, eid, name):
         _autosave_off(pedal)
         sess.pcmode_on()
         if op == "writetest":
-            return _writetest(sess, path, eid, name)
-        return _execute(pedal, sess, op, path, eid, name)
+            return _writetest(sess, path, eid, name, margin=margin)
+        return _execute(pedal, sess, op, path, eid, name, margin=margin)
     finally:
         if pedal.is_connected():
             pedal.disconnect()
 
 
-def _writetest(sess, path, eid, name):
+def _writetest(sess, path, eid, name, margin=None):
     """The effect-list-free write exercise: upload + readback-verify + delete
     a DIY binary WITHOUT ever computing or writing the effect list; the list
     is read back before and after only to PROVE it never changed. This is
@@ -541,7 +621,7 @@ def _writetest(sess, path, eid, name):
           "readback-verify, delete; the effect list is never written"
           % (base, eid, name))
     try:
-        fs.writetest_effect(sess, base, data, flst_old)
+        fs.writetest_effect(sess, base, data, flst_old, margin=margin)
     except fs.TransferAborted as e:
         print("pedal_diy: write test did NOT complete, but the pedal was "
               "verified SAFE - nothing was changed.")
@@ -737,6 +817,32 @@ def _rescue_session(sess, good, good_path, remove_names, write_back):
 
 
 def main(argv):
+    # --free-margin-kb N, LEADING: the free-space margin override. Parsed
+    # and floor-checked before anything else, so a too-low value is refused
+    # with no pedal contact at all (file_session.UPLOAD_MARGIN_FLOOR).
+    margin = None
+    margin_kb = None
+    if argv and argv[0] == FREE_MARGIN_FLAG:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import file_session as fs
+        floor_kb = fs.UPLOAD_MARGIN_FLOOR // 1024
+        if len(argv) < 2 or not argv[1].isdigit():
+            sys.exit("%s needs a whole number of KB (floor %d KB, default "
+                     "%d KB), e.g. %s 64 install FILE.ZD2"
+                     % (FREE_MARGIN_FLAG, floor_kb, fs.UPLOAD_MARGIN // 1024,
+                        FREE_MARGIN_FLAG))
+        margin_kb = int(argv[1])
+        if margin_kb * 1024 < fs.UPLOAD_MARGIN_FLOOR:
+            sys.exit("%s %d REFUSED: below the floor of %d KB. The margin "
+                     "covers the effect list an install rewrites (up to "
+                     "12,324 bytes), so it is never set lower. Nothing was "
+                     "sent to the pedal."
+                     % (FREE_MARGIN_FLAG, margin_kb, floor_kb))
+        margin = margin_kb * 1024
+        argv = argv[2:]
+        if not argv or argv[0] not in ("install", "writetest"):
+            sys.exit("%s applies only to install and writetest"
+                     % FREE_MARGIN_FLAG)
     if not argv or argv[0] not in ("install", "uninstall", "writetest",
                                    "classify", "rescue"):
         sys.exit(__doc__)
@@ -788,6 +894,11 @@ def main(argv):
         require_clean_envelope(path)
     if op == "install":
         require_clean_zic(os.path.splitext(path)[0] + ".ZIC")
+    if margin is not None:
+        # the override is a deliberate act: say it and log it
+        print("pedal_diy: free-space margin OVERRIDDEN to %d KB (default %d "
+              "KB, floor %d KB)" % (margin_kb, 100, 32))
+        log(op, path, eid, name, "FREE-MARGIN-OVERRIDE %d KB" % margin_kb)
 
     if dry:
         print("pedal_diy: DRY-RUN - checks PASSED for %s (id 0x%08x, name '%s')"
@@ -803,7 +914,7 @@ def main(argv):
         log(op, path, eid, name, "DRY-RUN-OK")
         return EXIT_OK
 
-    return _run_transfer(op, path, eid, name)
+    return _run_transfer(op, path, eid, name, margin=margin)
 
 
 if __name__ == "__main__":

@@ -331,11 +331,19 @@ def s10_download_crc_error():
     check("a reboot would be safe", r.boot_safe())
 
 
+def wrote_anything(r):
+    """Did the engine send any write-block (`60 23`) to the mock?"""
+    return any(len(p) > 4 and p[3] == 0x60 and p[4] == fs.SUB_WRITE_BLOCK
+               for p in r.mock.rx_log)
+
+
 def s11_disk_full():
-    print("S11: not enough free space - refused BEFORE the window")
+    print("S11: not enough free space - refused BEFORE the first write")
     r = Run(disk_available=1000)
     outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW)
     check("outcome is a clean abort", outcome == "aborted")
+    check("NOTHING was written (no write block ever sent)",
+          not wrote_anything(r))
     check("uploaded files were cleaned up again",
           "GAIN.ZD2" not in r.mock.files and "GAIN.ZIC" not in r.mock.files)
     check("effect list untouched", r.flst_is(FLST_OLD))
@@ -401,12 +409,12 @@ def s15_no_change_no_window():
 def s16_pedal_diy_wrapper_end_to_end():
     print("S16: pedal_diy._execute install+uninstall end to end, driving the "
           "REAL wrapper (offline FLST validation + dispatch) against the mock, "
-          "with the REAL DIYGAIN.ZD2/ZIC build artifacts")
+          "with the REAL XXGAIN.ZD2/ZIC build artifacts")
     import pedal_diy
-    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZD2")
-    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZIC")
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
+    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZIC")
     if not (os.path.exists(zd2_path) and os.path.exists(zic_path)):
-        skip("no DIYGAIN build artifacts on this checkout - build the gain "
+        skip("no XXGAIN build artifacts on this checkout - build the gain "
              "effect first to run this scenario")
         return
     with open(zd2_path, "rb") as f:
@@ -415,7 +423,7 @@ def s16_pedal_diy_wrapper_end_to_end():
         gain_zic = f.read()
     eid, gname = pedal_diy.read_zd2(zd2_path)
 
-    # a pedal whose effect list does NOT yet contain DIYGAIN
+    # a pedal whose effect list does NOT yet contain XXGAIN
     flst_before = FLST_OLD
     grammar = zoomzt2.zoomzt2()   # never connects; grammar helpers only
     mock = mock_pedal.MockPedal(files={fs.FLST_NAME: flst_before})
@@ -426,16 +434,16 @@ def s16_pedal_diy_wrapper_end_to_end():
     with contextlib.redirect_stdout(out):
         rc = pedal_diy._execute(grammar, sess, "install", zd2_path, eid, gname)
     check("install returns EXIT_OK", rc == pedal_diy.EXIT_OK, "rc=%d" % rc)
-    check("DIYGAIN.ZD2 byte-exact on the mock",
-          mock.files.get("DIYGAIN.ZD2") == gain_zd2)
-    check("DIYGAIN.ZIC byte-exact on the mock",
-          mock.files.get("DIYGAIN.ZIC") == gain_zic)
+    check("XXGAIN.ZD2 byte-exact on the mock",
+          mock.files.get("XXGAIN.ZD2") == gain_zd2)
+    check("XXGAIN.ZIC byte-exact on the mock",
+          mock.files.get("XXGAIN.ZIC") == gain_zic)
     flst_installed = mock.files.get(fs.FLST_NAME)
     ok, _, _ = flst_check.validate_flst(flst_installed)
     check("effect list valid after install", ok)
     added, _ = flst_check.diff_entries(flst_before, flst_installed)
-    check("exactly the DIYGAIN entry was added",
-          len(added) == 1 and added[0][1] == "DIYGAIN.ZD2")
+    check("exactly the XXGAIN entry was added",
+          len(added) == 1 and added[0][1] == "XXGAIN.ZD2")
 
     # now uninstall it back off the same mock
     sess.pcmode_on()
@@ -443,8 +451,8 @@ def s16_pedal_diy_wrapper_end_to_end():
     with contextlib.redirect_stdout(out):
         rc = pedal_diy._execute(grammar, sess, "uninstall", zd2_path, eid, gname)
     check("uninstall returns EXIT_OK", rc == pedal_diy.EXIT_OK, "rc=%d" % rc)
-    check("DIYGAIN.ZD2 removed from the mock", "DIYGAIN.ZD2" not in mock.files)
-    check("DIYGAIN.ZIC removed from the mock", "DIYGAIN.ZIC" not in mock.files)
+    check("XXGAIN.ZD2 removed from the mock", "XXGAIN.ZD2" not in mock.files)
+    check("XXGAIN.ZIC removed from the mock", "XXGAIN.ZIC" not in mock.files)
     check("effect list is byte-identical to the pre-install baseline",
           mock.files.get(fs.FLST_NAME) == flst_before)
 
@@ -503,10 +511,10 @@ def s19_pedal_diy_native_size():
           "effect list - the REAL wrapper (download, offline compute, "
           "pad_to_native) preserves the native size end to end")
     import pedal_diy
-    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZD2")
-    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZIC")
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
+    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZIC")
     if not (os.path.exists(zd2_path) and os.path.exists(zic_path)):
-        skip("no DIYGAIN build artifacts on this checkout - build the gain "
+        skip("no XXGAIN build artifacts on this checkout - build the gain "
              "effect first to run this scenario")
         return
     eid, gname = pedal_diy.read_zd2(zd2_path)
@@ -527,8 +535,8 @@ def s19_pedal_diy_native_size():
     check("effect list valid after install",
           flst_check.validate_flst(flst_installed)[0])
     added, removed = flst_check.diff_entries(flst_native, flst_installed)
-    check("exactly the DIYGAIN entry was added",
-          len(added) == 1 and not removed and added[0][1] == "DIYGAIN.ZD2")
+    check("exactly the XXGAIN entry was added",
+          len(added) == 1 and not removed and added[0][1] == "XXGAIN.ZD2")
 
     sess.pcmode_on()
     out = io.StringIO()
@@ -601,9 +609,9 @@ def s22_pedal_diy_writetest():
           "wrapper's happy path (on a native-size list) and its "
           "listed-name refusal")
     import pedal_diy
-    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZD2")
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
     if not os.path.exists(zd2_path):
-        skip("no DIYGAIN build artifact on this checkout - build the gain "
+        skip("no XXGAIN build artifact on this checkout - build the gain "
              "effect first to run this scenario")
         return
     eid, gname = pedal_diy.read_zd2(zd2_path)
@@ -616,7 +624,7 @@ def s22_pedal_diy_writetest():
     with contextlib.redirect_stdout(out):
         rc = pedal_diy._writetest(sess, zd2_path, eid, gname)
     check("writetest returns EXIT_OK", rc == pedal_diy.EXIT_OK, "rc=%d" % rc)
-    check("file absent at the end", "DIYGAIN.ZD2" not in mock.files)
+    check("file absent at the end", "XXGAIN.ZD2" not in mock.files)
     check("effect list byte-identical (native size, untouched)",
           mock.files.get(fs.FLST_NAME) == flst_native)
     check("no delete/open-for-write ever addressed the effect list",
@@ -624,7 +632,7 @@ def s22_pedal_diy_writetest():
 
     # refusal: a name the effect list REFERENCES must be refused before
     # any write (deleting its file would strand the entry)
-    flst_ref = zoomzt2.zoomzt2().add_effect(FLST_OLD, "DIYGAIN.ZD2", "1.00",
+    flst_ref = zoomzt2.zoomzt2().add_effect(FLST_OLD, "XXGAIN.ZD2", "1.00",
                                             eid)
     mock2 = mock_pedal.MockPedal(files={fs.FLST_NAME: flst_ref})
     sess2 = fs.FileSession(mock2)
@@ -640,7 +648,7 @@ def s22_pedal_diy_writetest():
         check("listed name refused before any write",
               e.code == pedal_diy.EXIT_REFUSED, "exit=%r" % (e.code,))
     check("nothing was written to the refusing mock",
-          "DIYGAIN.ZD2" not in mock2.files
+          "XXGAIN.ZD2" not in mock2.files
           and mock2.files.get(fs.FLST_NAME) == flst_ref
           and not mock2.wedged())
 
@@ -684,9 +692,9 @@ def s24_envelope_gate_refuses_bad_container():
           "file BEFORE any pedal traffic (the @4 invariant the file in "
           "both 2026-07 pedal losses violated, plus a corrupt checksum)")
     import pedal_diy
-    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZD2")
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
     if not os.path.exists(zd2_path):
-        skip("no DIYGAIN build artifact on this checkout - build the gain "
+        skip("no XXGAIN build artifact on this checkout - build the gain "
              "effect first to run this scenario")
         return
     with open(zd2_path, "rb") as f:
@@ -793,10 +801,10 @@ def s25_rescue_remove_orphan():
           "target before any pedal traffic, and never claims safety if a "
           "delete does not verify")
     import pedal_diy
-    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZD2")
-    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "DIYGAIN.ZIC")
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
+    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZIC")
     if not (os.path.exists(zd2_path) and os.path.exists(zic_path)):
-        skip("no DIYGAIN build artifacts on this checkout - build the gain "
+        skip("no XXGAIN build artifacts on this checkout - build the gain "
              "effect first to run this scenario")
         return
     eid, gname = pedal_diy.read_zd2(zd2_path)
@@ -890,6 +898,277 @@ def s25_rescue_remove_orphan():
                   e.code == pedal_diy.EXIT_REFUSED, "exit=%r" % (e.code,))
 
 
+def s26_resident_collision_gate():
+    print("S26: the DIY-versus-DIY collision gate - an install whose "
+          "filename or id collides with a DIFFERENT resident effect is "
+          "REFUSED before any upload; the documented uninstall-first flow "
+          "stays the only replace path")
+    import pedal_diy
+
+    # The pure decision function first - these run on every checkout.
+    entries = [(7, "WFRES.ZD2", "1.00", 0x07001F55, 1)]
+    check("clean incoming name+id -> no reasons",
+          pedal_diy.check_resident_collisions(entries, "WFNEW.ZD2",
+                                              0x07001F66) == [])
+    r = pedal_diy.check_resident_collisions(entries, "WFRES.ZD2", 0x07001F66)
+    check("same filename, different id -> filename-collision reason",
+          len(r) == 1 and "DIFFERENT resident" in r[0], repr(r))
+    r = pedal_diy.check_resident_collisions(entries, "WFRES.ZD2", 0x07001F55)
+    check("same filename, same id -> uninstall-first reason",
+          len(r) == 1 and "UNINSTALL FIRST" in r[0], repr(r))
+    r = pedal_diy.check_resident_collisions(entries, "WFNEW.ZD2", 0x07001F55)
+    check("different filename, same id -> id-collision reason",
+          len(r) == 1 and "share an id" in r[0], repr(r))
+    check("case-insensitive filename match (pedal names are canonical "
+          "uppercase)",
+          pedal_diy.check_resident_collisions(
+              entries, "wfres.zd2", 0x07001F66) != [])
+
+    # End to end through the REAL wrapper against the mock, with the real
+    # XXGAIN build artifact (skips on a clean checkout, like S16).
+    zd2_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZD2")
+    zic_path = os.path.join(_ROOT, "effects", "gain", "build", "XXGAIN.ZIC")
+    if not (os.path.exists(zd2_path) and os.path.exists(zic_path)):
+        skip("no XXGAIN build artifacts on this checkout - build the gain "
+             "effect first to run this scenario")
+        return
+    eid, gname = pedal_diy.read_zd2(zd2_path)
+    zbase = os.path.basename(zd2_path)
+    diy_group = (eid >> 24) & 0xFF
+    other_id = (diy_group << 24) | 0x1F5E   # same group, different low16
+    grammar = zoomzt2.zoomzt2()             # grammar helpers only
+
+    def refused_install(flst):
+        """Run a real install against a fresh mock holding `flst`; expect
+        an up-front EXIT_REFUSED with the mock untouched."""
+        mock = mock_pedal.MockPedal(files={fs.FLST_NAME: flst})
+        sess = fs.FileSession(mock)
+        sess.pcmode_on()
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                pedal_diy._execute(grammar, sess, "install", zd2_path, eid,
+                                   gname)
+            return None, mock
+        except SystemExit as e:
+            return e.code, mock
+
+    # filename collision with a DIFFERENT resident effect
+    flst_namehit = make_flst([("DELAY.ZD2", "1.00", 0x08000010),
+                              (zbase, "1.00", other_id)])
+    code, mock = refused_install(flst_namehit)
+    check("filename collision refused with EXIT_REFUSED",
+          code == pedal_diy.EXIT_REFUSED, "exit=%r" % (code,))
+    check("filename collision: nothing uploaded, effect list untouched",
+          zbase not in mock.files
+          and mock.files.get(fs.FLST_NAME) == flst_namehit
+          and not mock.wedged())
+
+    # same effect already resident (same filename AND id)
+    flst_same = make_flst([("DELAY.ZD2", "1.00", 0x08000010),
+                           (zbase, "1.00", eid)])
+    code, mock = refused_install(flst_same)
+    check("already-installed same effect refused (uninstall-first flow)",
+          code == pedal_diy.EXIT_REFUSED, "exit=%r" % (code,))
+    check("already-installed: mock untouched",
+          zbase not in mock.files
+          and mock.files.get(fs.FLST_NAME) == flst_same)
+
+    # id collision under a different resident filename
+    flst_idhit = make_flst([("DELAY.ZD2", "1.00", 0x08000010),
+                            ("WFOTHER.ZD2", "1.00", eid)])
+    code, mock = refused_install(flst_idhit)
+    check("id collision refused with EXIT_REFUSED",
+          code == pedal_diy.EXIT_REFUSED, "exit=%r" % (code,))
+    check("id collision: mock untouched",
+          zbase not in mock.files
+          and mock.files.get(fs.FLST_NAME) == flst_idhit)
+
+    # control: a collision-free list still installs (the gate does not
+    # false-positive; S16 proves the full round-trip)
+    flst_clean = make_flst([("DELAY.ZD2", "1.00", 0x08000010),
+                            ("PLACEHLD.ZD2", "1.00",
+                             (diy_group << 24) | 0x01)])
+    mock = mock_pedal.MockPedal(files={fs.FLST_NAME: flst_clean})
+    sess = fs.FileSession(mock)
+    sess.pcmode_on()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = pedal_diy._execute(grammar, sess, "install", zd2_path, eid,
+                                gname)
+    check("collision-free install still returns EXIT_OK",
+          rc == pedal_diy.EXIT_OK, "rc=%r" % (rc,))
+    check("collision-free install landed the file",
+          mock.files.get(zbase) is not None)
+
+
+def s28_upload_margin():
+    print("S28: the free-space gate holds UPLOAD_MARGIN (%d bytes) exactly, "
+          "for install AND write test" % fs.UPLOAD_MARGIN)
+    check("UPLOAD_MARGIN is 100 KB", fs.UPLOAD_MARGIN == 100 * 1024)
+    check("alloc_size rounds UP to ALLOC_UNIT",
+          (fs.alloc_size(0), fs.alloc_size(1), fs.alloc_size(4096),
+           fs.alloc_size(4097)) == (0, 4096, 4096, 8192))
+    need = sum(fs.alloc_size(len(d)) for _, d in INSTALL_FILES)
+
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN - 1)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW)
+    check("install: one byte short of the margin is a clean abort",
+          outcome == "aborted")
+    check("install: nothing was written", not wrote_anything(r))
+    check("install: no file left behind",
+          "GAIN.ZD2" not in r.mock.files and "GAIN.ZIC" not in r.mock.files)
+    check("install: the refusal names the margin",
+          "safety margin" in getattr(r, "message", ""))
+    check("install: effect list untouched", r.flst_is(FLST_OLD))
+    check("install: a reboot would be safe", r.boot_safe())
+
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW)
+    check("install: exactly the margin left is allowed", outcome == "success")
+    check("install: ZD2 stored byte-exact",
+          r.mock.files.get("GAIN.ZD2") == ZD2_BYTES)
+
+    need1 = fs.alloc_size(len(ZD2_BYTES))
+    r = Run(disk_available=need1 + fs.UPLOAD_MARGIN - 1)
+    outcome = r(fs.writetest_effect, "GAIN.ZD2", ZD2_BYTES, FLST_OLD)
+    check("writetest: one byte short of the margin is a clean abort",
+          outcome == "aborted")
+    check("writetest: nothing was written", not wrote_anything(r))
+    check("writetest: effect list untouched", r.flst_is(FLST_OLD))
+
+    r = Run(disk_available=need1 + fs.UPLOAD_MARGIN)
+    outcome = r(fs.writetest_effect, "GAIN.ZD2", ZD2_BYTES, FLST_OLD)
+    check("writetest: exactly the margin left is allowed",
+          outcome == "success")
+
+
+class _PedalReached(Exception):
+    """Raised by the tripwires below; never caught by pedal_diy."""
+
+
+@contextlib.contextmanager
+def _pedal_tripwire():
+    """Replace pedal_diy's two routes to a real pedal (_run_transfer, and
+    _connect beneath it) with tripwires that record the call and raise. So
+    main() can be driven end to end with NO way to open a MIDI port, and a
+    scenario can prove that a refusal came before any pedal contact."""
+    import pedal_diy
+    calls = []
+
+    def trip_run(*a, **k):
+        calls.append(("_run_transfer", a, k))
+        raise _PedalReached("tripwire: _run_transfer reached")
+
+    def trip_connect(*a, **k):
+        calls.append(("_connect", a, k))
+        raise _PedalReached("tripwire: _connect reached")
+
+    saved = (pedal_diy._run_transfer, pedal_diy._connect)
+    pedal_diy._run_transfer, pedal_diy._connect = trip_run, trip_connect
+    try:
+        yield calls
+    finally:
+        pedal_diy._run_transfer, pedal_diy._connect = saved
+
+
+def _main(argv):
+    """pedal_diy.main(argv) under the tripwire. Returns (how, value, calls,
+    output): how is 'returned', 'exit' or 'pedal' (a tripwire fired)."""
+    import pedal_diy
+    out = io.StringIO()
+    with _pedal_tripwire() as calls:
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                rc = pedal_diy.main(argv)
+            return "returned", rc, calls, out.getvalue()
+        except SystemExit as e:
+            return "exit", e.code, calls, out.getvalue()
+        except _PedalReached:
+            return "pedal", None, calls, out.getvalue()
+
+
+def s36_free_margin_override():
+    print("S36: the free-space margin OVERRIDE holds the floor "
+          "UPLOAD_MARGIN_FLOOR (%d bytes) and is honoured both ways"
+          % fs.UPLOAD_MARGIN_FLOOR)
+    check("the floor is 32 KB and below the default margin",
+          fs.UPLOAD_MARGIN_FLOOR == 32 * 1024
+          and fs.UPLOAD_MARGIN_FLOOR < fs.UPLOAD_MARGIN)
+    need = sum(fs.alloc_size(len(d)) for _, d in INSTALL_FILES)
+
+    def asked_disk_usage(r):
+        return any(len(p) > 4 and p[3] == 0x60 and p[4] == fs.SUB_DISK_USAGE
+                   for p in r.mock.rx_log)
+
+    # below the floor: refused BEFORE the disk-usage query, nothing written
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW,
+                margin=fs.UPLOAD_MARGIN_FLOOR - 1)
+    check("install: a margin one byte below the floor is a clean abort",
+          outcome == "aborted")
+    check("install: the refusal names the floor",
+          "below the floor" in getattr(r, "message", ""))
+    check("install: the disk-usage query was never sent",
+          not asked_disk_usage(r))
+    check("install: nothing was written", not wrote_anything(r))
+    check("install: effect list untouched", r.flst_is(FLST_OLD))
+
+    # at the floor: allows what the default margin refuses
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN_FLOOR)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW)
+    check("install: the DEFAULT margin refuses need + 32 KB",
+          outcome == "aborted")
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN_FLOOR)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW,
+                margin=fs.UPLOAD_MARGIN_FLOOR)
+    check("install: the floor margin allows exactly need + 32 KB",
+          outcome == "success")
+    check("install: the log says the margin was overridden",
+          any("OVERRIDDEN from the default" in l for l in r.lines))
+    check("install: ZD2 stored byte-exact",
+          r.mock.files.get("GAIN.ZD2") == ZD2_BYTES)
+
+    # raised: refuses what the default allows
+    r = Run(disk_available=need + fs.UPLOAD_MARGIN)
+    outcome = r(fs.install_effect, INSTALL_FILES, FLST_OLD, FLST_NEW,
+                margin=2 * fs.UPLOAD_MARGIN)
+    check("install: a raised margin refuses what the default allows",
+          outcome == "aborted")
+    check("install: nothing was written", not wrote_anything(r))
+
+    # the write test honours the same override
+    need1 = fs.alloc_size(len(ZD2_BYTES))
+    r = Run(disk_available=need1 + fs.UPLOAD_MARGIN_FLOOR)
+    outcome = r(fs.writetest_effect, "GAIN.ZD2", ZD2_BYTES, FLST_OLD,
+                margin=fs.UPLOAD_MARGIN_FLOOR)
+    check("writetest: the floor margin allows exactly need + 32 KB",
+          outcome == "success")
+    r = Run(disk_available=need1 + fs.UPLOAD_MARGIN)
+    outcome = r(fs.writetest_effect, "GAIN.ZD2", ZD2_BYTES, FLST_OLD,
+                margin=fs.UPLOAD_MARGIN_FLOOR - 1)
+    check("writetest: below the floor is a clean abort", outcome == "aborted")
+    check("writetest: nothing was written", not wrote_anything(r))
+
+    # pedal_diy refuses a too-low flag before ANY pedal contact
+    import pedal_diy
+    how, code, calls, out = _main([pedal_diy.FREE_MARGIN_FLAG, "31",
+                                   "install", "/nonexistent/XXNONE.ZD2"])
+    check("pedal_diy: --free-margin-kb 31 exits before touching the file "
+          "or the pedal", how == "exit" and not calls
+          and "below the floor" in str(code))
+    how, code, calls, out = _main([pedal_diy.FREE_MARGIN_FLAG, "abc",
+                                   "install", "/nonexistent/XXNONE.ZD2"])
+    check("pedal_diy: a non-numeric value is refused",
+          how == "exit" and not calls and "whole number" in str(code))
+    how, code, calls, out = _main([pedal_diy.FREE_MARGIN_FLAG, "64",
+                                   "uninstall", "/nonexistent/XXNONE.ZD2"])
+    check("pedal_diy: the flag is refused for uninstall",
+          how == "exit" and not calls and "only to install" in str(code))
+
+
 def main():
     print(__doc__.split("\n")[0])
     print()
@@ -911,11 +1190,14 @@ def main():
                      s22_pedal_diy_writetest,
                      s23_rescue_recovers_a_wedged_session,
                      s24_envelope_gate_refuses_bad_container,
-                     s25_rescue_remove_orphan):
+                     s25_rescue_remove_orphan,
+                     s26_resident_collision_gate,
+                     s28_upload_margin,
+                     s36_free_margin_override):
         scenario()
         print()
 
-    print("S26: this suite left the real operation log alone")
+    print("S27: this suite left the real operation log alone")
     check("tools-pedal/pedal_diy.log unchanged by the whole run",
           log_fingerprint(real_log) == log_before,
           "mock runs must never appear in the record of what touched a "

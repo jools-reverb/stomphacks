@@ -9,7 +9,7 @@ SAFETY.md "An interrupted file transfer can brick".
 
 So this engine treats every pedal file WRITE as brick-capable until it has
 completed AND been read back AND the file session is closed, and it enforces
-that with four mechanical layers (not procedures - code):
+that with five mechanical layers (not procedures - code):
 
   1. EVERY receive has a TIMEOUT. A lost reply becomes a fast, clean error,
      never a hang. One lost reply is tolerated (a read-only status poll is
@@ -23,6 +23,10 @@ that with four mechanical layers (not procedures - code):
      on - is rewritten through `replace_flst()`, which keeps the danger
      window as small and as guarded as the protocol allows (see below), and
      retries with the known-good bytes in hand until the readback verifies.
+  5. Before the FIRST write of an install or a write test, a FREE-SPACE
+     GATE (`check_upload_space`) refuses unless UPLOAD_MARGIN bytes stay
+     free after the upload, so a transfer never fills the pedal's storage.
+     It only reads (`60 29`); a refusal writes nothing.
 
 If, after all that, the engine still cannot verify the pedal is safe, it
 prints an impossible-to-miss DO-NOT-POWER-CYCLE banner and exits with a
@@ -80,6 +84,26 @@ RECV_TIMEOUT = 5.0           # normal replies arrive in milliseconds
 ABORT_TIMEOUT = 2.0          # per-receive budget during a clean abort
 FLST_WRITE_ATTEMPTS = 3      # retries of the critical effect-list rewrite
 DISK_MARGIN = 4096           # required free bytes beyond the FLST size
+# Free bytes that must REMAIN on the pedal after an effect upload. The
+# pedal's storage is small (about 6 MB), and what the pedal does if its
+# storage fills up during a transfer is unknown. The margin covers the
+# effect list an install rewrites (8,502 bytes, up to 12,324 on a
+# factory-fresh MS-70CDR+) with room to spare; the uploaded files are
+# counted on top of it.
+UPLOAD_MARGIN = 100 * 1024
+# The lowest margin an override may set (pedal_diy `--free-margin-kb`).
+# The margin covers the effect list that an install REWRITES (8,502 bytes,
+# up to 12,324 on a factory-fresh MS-70CDR+), so a margin like 10 KB would
+# sit below the thing it protects. 32 KB is about 2.5 times the largest
+# list plus one 4 KB block. check_upload_space() refuses a smaller margin
+# before it reads anything from the pedal; pedal_diy refuses it before any
+# pedal contact.
+UPLOAD_MARGIN_FLOOR = 32 * 1024
+# Each file is assumed to take whole 4 KB blocks of storage (inferred: the
+# backups of two pedals fit their ~6 MB only with 4 KB rounding). Rounding
+# UP keeps the check on the safe side whatever the true block size below
+# 4 KB.
+ALLOC_UNIT = 4096
 
 
 class TransferError(Exception):
@@ -568,11 +592,54 @@ def _unwind(sess, failure, cleanup_names, flst_expect, log):
     raise PedalUnresolved(failure)
 
 
-def install_effect(sess, files, flst_old, flst_new, log=None):
+def alloc_size(n):
+    """Bytes a file of n bytes is assumed to occupy (rounded UP to
+    ALLOC_UNIT)."""
+    return -(-n // ALLOC_UNIT) * ALLOC_UNIT
+
+
+def check_upload_space(sess, files, margin=None):
+    """The pre-upload free-space gate: refuse (TransferError) unless at
+    least `margin` bytes (default UPLOAD_MARGIN) stay free after writing
+    every file in `files` ([(name, bytes)]). Read-only (`60 29`); call it
+    BEFORE the first write, so a refusal leaves nothing on the pedal.
+    `margin` is the override (pedal_diy `--free-margin-kb`): anything below
+    UPLOAD_MARGIN_FLOOR is refused HERE, before the disk-usage query, so a
+    too-low override never reaches the pedal at all. Returns (maximum,
+    available, need) for the log."""
+    if margin is None:
+        margin = UPLOAD_MARGIN
+    if margin < UPLOAD_MARGIN_FLOOR:
+        raise TransferError(
+            "free-space margin %d bytes is below the floor of %d bytes "
+            "(%d KB): the margin covers the effect list an install rewrites "
+            "(up to 12,324 bytes), so it is never set lower. Nothing was "
+            "written." % (margin, UPLOAD_MARGIN_FLOOR,
+                          UPLOAD_MARGIN_FLOOR // 1024))
+    maximum, available = sess.disk_usage()
+    need = sum(alloc_size(len(data)) for _, data in files)
+    if available - need < margin:
+        raise TransferError(
+            "not enough free space: the pedal reports %d bytes free (of "
+            "%d); these files need %d, which would leave %d - less than "
+            "the %d-byte safety margin. Nothing was written. Uninstall "
+            "something first." % (available, maximum, need,
+                                  available - need, margin))
+    override = ("" if margin == UPLOAD_MARGIN
+                else " OVERRIDDEN from the default %d" % UPLOAD_MARGIN)
+    sess.log("free space OK: %d bytes free of %d, need %d, %d left after "
+             "(margin %d%s)" % (available, maximum, need, available - need,
+                                margin, override))
+    return maximum, available, need
+
+
+def install_effect(sess, files, flst_old, flst_new, log=None, margin=None):
     """Install: upload + verify every file in `files` ([(name, bytes)],
     icon first), THEN rewrite the effect list. Files-then-list order means
     a failure before the list rewrite leaves the pedal logically unchanged
-    (at worst an orphan file, which is harmless and removable).
+    (at worst an orphan file, which is harmless and removable). `margin`
+    is the free-space gate's override (None = UPLOAD_MARGIN; never below
+    UPLOAD_MARGIN_FLOOR).
 
     Returns {'flst_retries': n}. Raises TransferAborted / PedalUnresolved.
     """
@@ -592,6 +659,8 @@ def install_effect(sess, files, flst_old, flst_new, log=None):
                 raise TransferAborted(
                     "'%s' is already on the pedal - uninstall first "
                     "(nothing was written)" % name)
+        # free-space gate, before ANY write (UPLOAD_MARGIN, or the override)
+        check_upload_space(sess, files, margin)
         for name, data in files:
             uploaded.append(name)
             verified_upload(sess, name, data)
@@ -615,7 +684,7 @@ def install_effect(sess, files, flst_old, flst_new, log=None):
     return {"flst_retries": retries}
 
 
-def writetest_effect(sess, name, data, flst_expect, log=None):
+def writetest_effect(sess, name, data, flst_expect, log=None, margin=None):
     """The effect-list-free WRITE TEST (the first-hardware-run rung):
     upload `name`, read it back and byte-compare, then delete it and
     verify it is gone - never computing, never writing the effect list.
@@ -643,6 +712,8 @@ def writetest_effect(sess, name, data, flst_expect, log=None):
                 "'%s' is already on the pedal - refusing the write test "
                 "(deleting it at the end could break what is there); "
                 "nothing was written" % name)
+        # free-space gate, before the write (UPLOAD_MARGIN, or the override)
+        check_upload_space(sess, [(name, data)], margin)
         verified_upload(sess, name, data)
         sess.log("%s uploaded, read back, byte-verified (%d bytes)"
                  % (name, len(data)))

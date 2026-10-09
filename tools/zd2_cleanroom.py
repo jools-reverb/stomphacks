@@ -127,6 +127,17 @@ def gen_text_functions(m: dict) -> str:
                   f"           STW.D1T1      A2,*+A4[{off // 4}]"
                   f"        ; +{off} caller-struct field (dll_fields)\n")
 
+    # Footswitch config (manifest "footswitch"): the firmware reads the
+    # footswitch mode from a MultiFswTbl reached via caller-struct +8 (word
+    # 2), the stock EXCITER/BOMBER layout (docs/building-effects.md
+    # "Footswitch"). Unlike dll_fields (a constant), this stores a
+    # LABEL address, so it is emitted here rather than through that hook.
+    if m.get("footswitch"):
+        extra += (f"           MVKL.S1       {s}_MultiFswTbl,A2\n"
+                  f"           MVKH.S1       {s}_MultiFswTbl,A2\n"
+                  f"           STW.D1T1      A2,*+A4[2]"
+                  f"        ; +8 footswitch config (MultiFswTbl)\n")
+
     dll = f"""
 ; --- Dll_{s}: loader entry (e_entry). Contract (docs/zd2-abi.md "Entry
 ; points"): A4 -> caller struct; store entry count (byte) at +0, param/
@@ -335,12 +346,21 @@ def gen_const_data(m: dict, table_entries_asm: str, coe_words_asm: str) -> str:
 
     lines = ['', '\t.sect ".const"', "\t.align 8"]
 
-    # entry 0: OnOff (docs/zd2-abi.md param-table layout; w7 -> _onf)
+    # entry 0: OnOff (docs/zd2-abi.md param-table layout; w7 -> _onf).
+    # w12 = 0x00080000 on effects with a footswitch special function: the
+    # marker EVERY stock footswitch-toggle effect (EXCITER/KKFLNG1U/LOOPROLL/
+    # BOMBER) sets on OnOff and normal effects leave 0; it is what makes the
+    # firmware recognise the special function (show the footswitch toggle
+    # param, enable momentary, suppress the hold-for-tuner shortcut). Gated on
+    # the manifest "footswitch" block so non-footswitch effects stay
+    # byte-identical. (docs/building-effects.md "Footswitch".)
+    onoff_w12 = 0x00080000 if m.get("footswitch") else 0
     lines += [f"\t.def {s}", f"{s}:"]
     lines += _entry_words(
         [onoff[0], onoff[1], onoff[2], 1, 0, 0, 0,
-         f"Fx_SFX_{s}_onf", 0, 0, 0, 0, 0, 0],
-        "entry 0: 'OnOff', w3 max 1, w7 = onf handler")
+         f"Fx_SFX_{s}_onf", 0, 0, 0, 0, onoff_w12, 0],
+        "entry 0: 'OnOff', w3 max 1, w7 = onf handler"
+        + (" (w12 0x80000 = footswitch special-fn marker)" if onoff_w12 else ""))
     # entry 1: effect descriptor (w3 = 0xffffffff sentinel, w7 = init,
     # w8 = audio fn, w10 = per-effect float of unknown meaning)
     lines += _entry_words(
@@ -402,6 +422,25 @@ def gen_const_data(m: dict, table_entries_asm: str, coe_words_asm: str) -> str:
             packed = label.encode("ascii").ljust(stride, b"\0")
             body = ",".join(str(b) for b in packed)
             lines.append(f"           .byte {body}\t; {v} = '{label}'")
+
+    # Footswitch config tables (manifest "footswitch"): a 1-word sub-table
+    # and a 4-slot MultiFswTbl whose used slot points at it. The Dll stub
+    # wires MultiFswTbl into caller-struct +8; the firmware reads it (the
+    # effect code never does): stock EXCITER/BOMBER shape. Emitted LAST so
+    # the param table stays FIRST in .const (loader contract). The sub-table
+    # bitfield 0x100 is hardware-validated (WfMerge v2.04, 2026-07-25).
+    fsw = m.get("footswitch")
+    if fsw:
+        slot = fsw["slot"]
+        lines += ["", "\t.align 8", f"\t.def {s}_FswSub", f"{s}_FswSub:",
+                  f"           .word 0x{fsw['sub_word']:08x}"
+                  f"\t; footswitch sub-table (stock 0x100)"]
+        lines += ["", "\t.align 8", f"\t.def {s}_MultiFswTbl",
+                  f"{s}_MultiFswTbl:\t\t; 4 footswitch slots; slot {slot} used"]
+        for i in range(4):
+            lines.append(
+                f"           .word {s}_FswSub\t; footswitch {i + 1}"
+                if i == slot else "           .word 0x00000000")
     return "\n".join(lines) + "\n"
 
 

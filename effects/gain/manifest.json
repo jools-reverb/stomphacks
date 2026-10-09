@@ -1,7 +1,8 @@
 {
   "name": "DIY Gain",
-  "filename": "DIYGAIN",
-  "id": "07000f81",
+  "filename": "XXGAIN",
+  "id": "07001000",
+  "author": "waveformer",
   "version": "1.00",
   "display": "DIY GAIN",
   "badge": "SH",

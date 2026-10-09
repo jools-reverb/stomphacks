@@ -20,101 +20,117 @@ now points at the wrong one. That is the single outcome to avoid.
 What a patch actually resolves to when two installed effects share an id is
 still untested. What is now confirmed, by accident, is the symptom one level
 up: the pedal's effect browser shows icons only, no filenames or names, so two
-DIY files sharing an id become visually indistinguishable there. Nothing in
-this project's install tooling catches a DIY-vs-DIY id collision either; it
-only ever checks a new upload against the stock catalog. Read the pedal back
-and check before you install, not after.
+DIY files sharing an id become visually indistinguishable there. The safe
+installer, `tools-pedal/pedal_diy.py`, guards against this: before it uploads
+anything it reads the pedal's effect list and refuses an effect whose id or
+filename matches one that is already installed. It can only see the pedal it
+is talking to, so an id still has to be unique among everything you plan to
+install.
 
 ## How ids are structured
 
 The top byte is the effect group. It also decides which category the effect
-shows up under in the pedal's browser. The table below shows the effect ids for
-the MS-70CDR+. The category ids could differ for other pedals (like
-the MS-60B+)), see for instance zoom-explorer, ZoomDevice.ts,
+shows up under in the pedal's browser. The group numbers are per model: the
+same number names a different category on another pedal, and each model uses
+only some of the numbers. The table below shows the groups the stock effects
+use on each MS Plus pedal. See also zoom-explorer, ZoomDevice.ts,
 getCategoryNameFromID().
 
-| Top byte | Browser category |
-|---|---|
-| 01 | DYNAMICS |
-| 02 | FILTER |
-| 03 | DRIVE |
-| 04 | AMP |
-| 05 | CABINET |
-| 06 | MODULATION |
-| 07 | SFX |
-| 08 | DELAY |
-| 09 | REVERB |
-| 0b | PEDAL |
+| Top byte | MS-70CDR+ | MS-50G+ | MS-60B+ | MS-80IR+ | MS-200D+ |
+|---|---|---|---|---|---|
+| 01 | DYNAMICS | DYNAMICS | DYNAMICS | - | BOOSTER |
+| 02 | FILTER | FILTER | FILTER | - | OVERDRIVE |
+| 03 | - | DRIVE | DRIVE | - | DISTORTION |
+| 04 | - | PREAMP | PREAMP | AMP | FUZZ |
+| 05 | - | - | BASS AMP | - | PREAMP |
+| 06 | MODULATION | MODULATION | MODULATION | TOOL | TOOL |
+| 07 | SFX | SFX | PITCH SHIFT | - | - |
+| 08 | DELAY | DELAY | SYNTH | DELAY | - |
+| 09 | REVERB | REVERB | SFX | - | - |
+| 0a | - | - | DELAY | - | - |
+| 0b | - | - | REVERB | - | - |
+| 0f | - | - | - | AMBIENCE | - |
+| 1d | - | - | - | - | DRIVE |
 
-The group enum comes from `zoomzt2.py` in mungewell/zoom-zt2; other pedal
-models have further groups. The rest of the id is the effect's identity within
-its group, and stock effects sit at low values there. You can see the full
-stock catalogue for your own pedal by reading it back, or in the zoom-zt2
-catalog files.
+A dash means that no stock effect on that model uses the group. The names are
+the ones the stock effect files carry in their own headers. The group list in
+`zoomzt2.py` (mungewell/zoom-zt2) is one list for all models (`04` AMP, `05`
+CABINET, `0b` PEDAL), so its labels are not always the ones in this table.
+
+The rest of the id is the effect's identity within its group, and stock
+effects sit at low values there. You can see the full stock catalogue for your
+own pedal by reading it back, or in the zoom-zt2 catalog files.
 
 ## Picking an id
 
-Note: this is an area the community still has to work out conventions for.
-The text below is just my initial simple solution for my own experiments.
-See the section below for more thoughts from me.
+The rule is short: pick an id that collides with nothing, and keep it in a
+range the safety tooling recognises as DIY. Where you pick depends on whether
+the effect is just for your own pedal or something you will hand to other
+people.
 
-The rule is short: pick an id that collides with nothing, and put it on the DIY
-page so the safety tooling recognises it as yours.
+1. For an effect you will only run on your own pedal, use the playground:
+   `low16 0x1000` to `0x13ff` (any group byte). These ids are throwaway: reuse
+   them freely as an effect changes, and name the build with an `XX` prefix so
+   it is obviously expendable. `low16 0x1400` to `0x1fff` is reserved, so do
+   not pick ids from it. The older DIY page `07000f00` to `07000fff`
+   works too, but Zoom occupies both ends of it (`07000f00` is the stock LINE
+   SEL effect and `07000ff0` is the pedal's built-in BPM module, which has no
+   file but still owns the id), so prefer the playground. The installer refuses
+   those two stock ids either way.
 
-1. Use the DIY page `07000f00` to `07000fff`, and within it pick from
-   `07000f01` to `07000fef`. The page sits in the SFX group and this project's
-   tools recognise an id on it as a DIY effect, but Zoom occupies both ends:
-   `07000f00` is the stock LINE SEL effect, and `07000ff0` is the pedal's
-   built-in BPM module. The BPM module is easy to miss. On the MS-70CDR+ and
-   MS-50G+ it has no effect file anywhere; it exists only as an entry in the
-   pedal's own effect list, but the id is taken all the same. The installer
-   knows about both and refuses them. Whether Zoom parks anything else above
-   `07000fef` is unknown, so stay below it. The effects shipped here already
-   occupy four ids on the page: the gain example is `07000f81`, and the
-   routing family is `07000f14` (WfSplit), `07000f15` (WfMerge) and
-   `07000f51` (WfSwap). Copy the gain folder and change the id to a value in
-   that range that nothing is using.
+2. For an effect you will distribute, get an id range of your own first, so
+   it will not collide with anyone else's DIY effects on a shared pedal. Open
+   an issue in this repo and I assign you one, recorded in
+   [effect-authors.json](../ids/effect-authors.json). Do not pick an id at
+   `low16 0x2000` or above yourself: every range there belongs to an author,
+   and the first one, `0x2000` to `0x23ff`, is mine. How it works is in
+   [id-scheme.md](id-scheme.md). The effects in this repo are examples, so they
+   stay in the playground, with the SFX group byte `07` for the MS-70CDR+, at
+   `07001000` (DIY Gain), `07001010` (WfSplit), `07001020` (WfMerge) and
+   `07001030` (WfSwap). Copy the gain folder, and before you distribute, change
+   the id to one in your own range and the `author` in the manifest to you.
 
-2. The safe installer only ever touches DIY ids. `tools-pedal/pedal_diy.py`
+3. The safe installer only ever touches DIY ids. `tools-pedal/pedal_diy.py`
    installs or uninstalls an effect only if its id is in a DIY range AND its id,
    name and filename match no stock effect. It is fail-closed: an id outside the
    DIY range is refused outright, so the wrapper cannot act on a stock effect by
-   accident. Put your effect on the DIY page and you keep that safety net; take
-   it off the page and you lose it and have to drive the raw install by hand.
+   accident. Keep your effect in a DIY range and you keep that safety net; take
+   it out and you lose it and have to drive the raw install by hand.
    See [../tools-pedal/README.md](../tools-pedal/README.md) and
    [../SAFETY.md](../SAFETY.md).
 
-3. Do not collide with your own effects either. If you already have DIY effects
+4. Do not collide with your own effects either. If you already have DIY effects
    installed, keep their ids distinct. Read the pedal back to see what is on it
    before you add another.
 
-4. One id per effect, for good. Treat a released id like an API: a new version
+5. One id per effect, for good. Treat a released id like an API: a new version
    of an effect keeps its id, a genuinely new effect gets a new one.
 
-5. The filename has to be unique too: 8 characters or fewer, from A-Z 0-9 and
+6. The filename has to be unique too: 8 characters or fewer, from A-Z 0-9 and
    underscore. The id space and the pedal's filesystem are separate namespaces,
-   and the tooling pairs an effect with its icon by filename. The gain effect is
-   `DIYGAIN`. Name, filename and icon are part of an effect's identity when you
+   and the tooling pairs an effect with its icon by filename. Filenames start
+   with a 2-letter namespace prefix (`XX` for playground builds, an author's
+   registered prefix for released effects; the convention and the reason it
+   exists are in [id-scheme.md](id-scheme.md)). The gain effect is `XXGAIN`.
+   Name, filename and icon are part of an effect's identity when you
    release it (see [ip-and-licensing.md](ip-and-licensing.md)).
 
 ## The bigger question: who gets which ids
 
-There is no agreed, community-wide scheme for handing id ranges to different
-authors. Today people just stake out a range and try not to tread on each
-other. ELynx's zoom-fx-modding project states it uses ids with a `f1` prefix; I
-use the `07000f00` page here. That is the whole of the "system" so far.
-
-One idea that has been floated is a per-author registry, where each author
-claims a block of ids above the stock range and the claims are coordinated
-somewhere neutral - like the issue tracker for stomphacks or zoom-zt2. Nothing like that is settled, and this release does not try to settle it.
-Until it is, avoid collisions by hand: stay on the DIY page, and check a pedal
-readback before you install.
+So that DIY effects from different authors can coexist on one pedal, every
+author needs ids that nobody else uses. I hand out ranges of ids above the
+stock ids on request, and keep the list of who has which range in
+[effect-authors.json](../ids/effect-authors.json). I use it for my own
+effects, and I would like it to become a shared convention. How it works, and
+how to ask for a range, is in [id-scheme.md](id-scheme.md). It is a proposal,
+not a settled standard.
 
 ## Needs investigating
 
-* A shared per-author id-allocation scheme. None exists. The registry above is
-  one proposal, not a decision, and even the venue and the block sizes are
-  unresolved. For now, hand-check against a readback.
+* Adoption of the per-author scheme. It is a proposal
+  ([id-scheme.md](id-scheme.md)), so its uptake by other authors is still
+  open. Until you have a range of your own, hand-check a new id against a
+  readback.
 * Whether more built-in entries like the BPM module exist or will appear. The
   effect list of every current MS Plus model was checked and the BPM module is
   the only entry without a file today, but a firmware update could add one.

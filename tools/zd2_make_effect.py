@@ -44,10 +44,12 @@ What the cleanroom path does:
   7. Writes build/REPORT.md.
 
 Coefficient slot policy (docs/zd2-abi.md): coeff[0] and coeff[1] are the
-firmware bypass crossfade pair, and coeff[4] has an unknown host-side
-writer, so none of those are assigned to a knob. Knobs get [3], [5], [6],
-... [11], then [2], then [12], [13], [14]: up to 12, which is the pedal UI
-maximum of 4 knobs across 3 pages.
+firmware bypass crossfade pair and coeff[4] is the host master scale, so
+none of those are assigned to a knob. coeff[3] is zeroed by the firmware
+every time the tuner closes and coeff[2] is the stock output-level
+convention, so neither is handed out by default either (an explicit "slot"
+can still ask for them, with a warning). Knobs without a "slot" get [5],
+[6], ... [14] in order: up to 10.
 """
 
 from __future__ import annotations
@@ -82,15 +84,21 @@ OK_RELOC_TYPES = {0x01: "R_C6000_ABS32",
                   0x09: "R_C6000_ABS_L16",
                   0x0A: "R_C6000_ABS_H16"}
 
-# Free coefficient slots, in assignment order. coeff[0]/[1] = bypass
-# crossfade pair (host ramps), coeff[4] = unknown host writer; both are off
-# limits. [2] comes after the [3,5..11] block: it is only free because the
-# stock output-level registration is unhooked. [12,13,14] extend the order to
-# the UI maximum of 12 params (4 knobs x 3 pages); slots >= 12 are plain
-# effect-owned coeff words. Cleanroom scaffold only: its _Coe/init-memcpy are
-# 16 words / 64 B; the bitcrush scaffold keeps the stock 12-word table, so it
-# caps at the first 9.
-FREE_COEFF_SLOTS = [3, 5, 6, 7, 8, 9, 10, 11, 2, 12, 13, 14]
+# Free coefficient slots, in assignment order, for params that carry no
+# explicit "slot". coeff[0]/[1] = the bypass crossfade pair (host ramps),
+# coeff[4] = the host master scale; all three are off limits. coeff[3] is
+# also kept out of the default order: the pedal firmware writes a zero into
+# it every time the tuner closes, so a knob living there silently loses its
+# setting after any tuner use. coeff[2] is the stock output-level convention
+# and is likewise not handed out by default. Both stay reachable through an
+# explicit "slot" (the build prints a warning). The default order is
+# therefore [5..14]: up to 10 params. Cleanroom scaffold only: its
+# _Coe/init-memcpy are 16 words / 64 B; the bitcrush scaffold keeps the
+# stock 12-word table and its own proven 9-slot order.
+FREE_COEFF_SLOTS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+UNSAFE_DEFAULT_SLOTS = {2: "the stock output-level convention slot",
+                        3: "the slot the firmware zeroes at tuner close"}
+BITCRUSH_COEFF_SLOTS = [3, 5, 6, 7, 8, 9, 10, 11, 2]
 BITCRUSH_MAX_PARAMS = 9
 
 # Selector value-label tables (manifest "values"). The generated GetString
@@ -348,6 +356,147 @@ def _bash():
 # manifest
 # --------------------------------------------------------------------------
 
+# Filename-uniqueness convention, enforced at build time. The pedal stores
+# effects by their 8-character flash filename, a namespace separate from
+# the numeric id, and an install over an existing same-name file silently
+# keeps the old file. So filenames need the same collision discipline as
+# ids: every author gets a unique 2-letter prefix together with their id
+# range, and a filename is the prefix plus up to 6 name characters.
+# Playground ids (low16 below the 0x2000 publish line) may use the "XX"
+# marker instead of the author prefix. The registry
+# [ids/effect-authors.json](../ids/effect-authors.json) is the source of
+# truth; this table mirrors it so the tool also works standalone. The
+# convention is described in docs/id-scheme.md.
+PLAYGROUND_PREFIX = "XX"
+PLAYGROUND_LOW16_MAX = 0x1FFF        # low16 <= this = playground id
+AUTHOR_PREFIXES = {
+    "waveformer": ("WF", ()),        # (prefix, alias prefixes)
+}
+DEFAULT_AUTHOR = "waveformer"        # the example manifests in this repo
+
+
+def author_prefix_table() -> dict:
+    """author (lowercase nickname) -> (prefix, aliases). The built-in
+    mirror, overlaid by the live registry when one sits next to this tool
+    (tools/ and ids/effect-authors.json as siblings)."""
+    table = dict(AUTHOR_PREFIXES)
+    reg = Path(__file__).resolve().parent.parent / "ids" / "effect-authors.json"
+    if reg.is_file():
+        try:
+            data = json.loads(reg.read_text())
+        except ValueError as e:
+            die(f"author registry {reg} does not parse: {e}")
+        for a in data.get("authors", []):
+            nick, pref = a.get("nickname"), a.get("prefix")
+            if isinstance(nick, str) and isinstance(pref, str):
+                table[nick.lower()] = (
+                    pref.upper(),
+                    tuple(str(x).upper()
+                          for x in a.get("prefix_aliases", [])))
+    return table
+
+
+# --------------------------------------------------------------------------
+# Stock display-NAME collision rule, enforced at build time. Described in
+# docs/id-scheme.md next to the filename convention above.
+#
+# The pedal's effect browser lists effects by their DISPLAY NAME (the 11-byte
+# ASCII field at container offset 100, which this tool stamps from the
+# manifest "name"), so two effects sharing a name cannot be told apart there.
+# tools-pedal/pedal_diy.py already refuses to INSTALL a DIY effect whose name
+# matches a stock one, but that gate fires at the pedal, long after the
+# effect has been built, given an icon, given an id and written up. This is
+# the same rule at the first moment it is cheap to obey.
+#
+# SCOPE: the MS Plus SERIES-WIDE union of stock names, which is exactly the
+# set pedal_diy refuses on (tools-pedal/stock_catalog.py). Matching that set
+# is the point; a check covering one model only would still pass effects the
+# install gate rejects, which is the failure this exists to prevent.
+#
+# WHY A CONSTANT: this repository ships no stock Zoom binaries, so a build
+# tool that scanned a local effect corpus for names would find nothing here
+# and then disagree with the install gate. Effect NAMES are catalog facts,
+# the same identity metadata any pedal reports over MIDI, so they travel
+# with the tool exactly as tools-pedal/stock_catalog.py does.
+#
+# 479 stock effect files across the MS-200D+, MS-50G+, MS-60B+, MS-70CDR+
+# and MS-80IR+; 268 distinct names. Machine-generated from a stock-effect
+# catalog scan; do not edit by hand.
+STOCK_EFFECT_NAMES = frozenset([
+    '1073 Pre', '1176 LMT', '160 Comp', '7 HEAVEN', 'A-Filter',
+    'A-Pan DLY', 'AC 370', 'AG 750', 'AMPG SVT', 'Ac TpEcho',
+    'Aco.Sim', 'AirReverb', 'Ambience', 'AnalogCho', 'AnalogDly',
+    'Arena', 'AutoPan', 'AutoWah', 'B-MAN100', 'BBB Pre',
+    'BF_Flanger2', 'BG GRID', 'BG MARK1', 'BG MARK3', 'BPM',
+    'Ba AnaOct', 'Ba Chorus', 'Ba Detune', 'BaFlanger', 'BaFzSmile',
+    'BaMnPitch', 'BaOctaver', 'BaTalkSyn', 'BaVinFLNG', 'Ba_Ensmbl',
+    'Bass Cry', 'Bass DRV', 'Bass OD', 'BassA-Wah', 'BassGEQ',
+    'BassMetal', 'BassOctFZ', 'BassPEQ', 'BassPhase', 'BassStCho',
+    'BassSynth', 'BassTsDRV', 'BendCho', 'BitCrush', 'BlackOpt',
+    'BlueB DRV', 'Bomber', 'Bottom B', 'BrghtHall', 'BrghtRoom',
+    'C. Hall', 'CE_Cho5', 'CMN 0', 'CMN DRV0', 'CMN DRV1',
+    'CMN DRV2', 'CMN DRV3', 'CMN DRV4', 'CMN DRV5', 'Cave Reverb',
+    'Chamber', 'Chorus', 'ChorusOne', 'ChurchREV', 'Clear DRV',
+    'CloneCho', 'Comb Filter', 'Comp', 'CoronaCho', 'CryFilter',
+    'D.I Plus', 'DI-5 Pre', 'DIST One', 'DYN Comp', 'DYN Drive',
+    'DZ DRIVE', 'Dark OD', 'Dark Pre', 'Delay', 'Detune',
+    'Dirty Gate', 'DjentPre', 'DriveEcho', 'Dual Reverb', 'DualComp',
+    'DualDelay', 'Duo Phase', 'DuoTrem', 'Dyna Reverb', 'DynaDelay',
+    'DynaFLNGR', 'EBH360', 'EG Filter', 'EP Drive', 'EarlyRef',
+    'Echo Reverb', 'Ensemble', 'EnvFilter', 'Exciter', 'FD B-MAN',
+    'FD DLX-R', 'FD MASTER', 'FD Spring', 'FD TWIN-R', 'FilterDly',
+    'FilterPPD', 'Flanger', 'FlipTop', 'Fretless', 'GEMINOS',
+    'GateRevrb', 'Glam Comp', 'GoldDrive', 'Governor', 'GrayComp',
+    'Gt GEQ', 'Gt GEQ 7', 'HD Hall', 'HG THRTTL', 'HPS',
+    'HW 100', 'Hall REV', 'High EQ', 'HoldDelay', 'HoldRevrb',
+    'Holy Reverb', 'ICE Delay', 'KRAMPUS', 'Kick FLNG', 'L Chapel',
+    'LFO FLTR', 'LO-FI Rever', 'Lead', 'Limiter', 'LineSel',
+    'LoFiDelay', 'LoopRoll', 'Low EQ', 'LowPassFL', 'MATCH30',
+    'MB Comp', 'MONOTONE', 'MS 1959', 'MS 45os', 'MS 800',
+    'MUDDY', 'Mangled Spa', 'MetalWRLD', 'MiniMarkB', 'MirageCho',
+    'ModDelay', 'ModDelay2', 'ModReverb', 'MonoSynth', 'MultiTapD',
+    'MusicClub', 'MuteSW', 'NYC Muff', 'NoiseGate', 'ORG Trem',
+    'ORG120', 'OctFuzz', 'Octaver', 'OptComp', 'Orange Limi',
+    'OutputBST', 'Over Drive', 'OverDriveOn', 'P-P Delay', 'PH+Dist',
+    'POLLEX', 'ParaEQ', 'ParticleR', 'PhaseDly', 'Phaser',
+    'Pitch DLY', 'Plate REV', 'Plus DIST', 'PolyOct', 'PolyShift',
+    'RC Drive', 'REDLOOM', 'RackComp', 'Razor DRV', 'RectiDual',
+    'RedCR+BST', 'RedCrunch', 'Reso FLTR', 'Reverse Rev', 'ReverseDL',
+    'RingMod', 'RndmFLTR', 'RoomREV', 'RtCloset', 'SB Preamp',
+    'SMR400', 'SUN CB', 'SeqFLTR', 'Shimmer Rev', 'Shimmer2',
+    'SilkyCho', 'Sitar Sim', 'Slap Back R', 'SlapBackD', 'Slicer',
+    'SlowATTCK', 'SlowFLTR', 'SlwAtkDly', 'SmoothDly', 'SoftEcho',
+    'SolidPre', 'SpLoPre', 'SpaceHole', 'Splitter', 'SpotBoost',
+    'Spring Reve', 'SpringREV', 'SqueakDST', 'St Ba GEQ', 'St Gt GEQ',
+    'St GtGEQ7', 'St HighEQ', 'St Low EQ', 'St ParaEQ', 'StepFLTR',
+    'StereoCho', 'StereoDly', 'StompDly', 'StonePha', 'SweetDrv',
+    'SwellVibe', 'TB MK1.5', 'TE400SMX', 'TS Drive', 'TS+Boost',
+    'TapeEcho', 'TapeEcho3', 'TheVibe', 'TiledRoom', 'TremDelay',
+    'Tremolo', 'Tremolo Rev', 'TrgHldDly', 'TriChorus', 'UK 30A',
+    'UpOctBSTR', 'UrbanStd.', 'VELVET', 'Vibrato', 'VinFLNGR',
+    'VintageCE', 'VioletDST', 'VooDoo-B', 'WH CANVAS', 'WarpPhase',
+    'WaveSHPR', 'WoodyStd.', 'XtasyBlue', 'Z TronFLT', 'Z-Organ',
+    'Z-Synth', 'ZNR', 'Zen O.DRV',
+])
+
+
+def stock_name_key(name: str) -> str:
+    """The comparison key for a stock display-name collision: outer
+    whitespace stripped, case folded.
+
+    Deliberately a SUPERSET of the exact-match install gate in
+    tools-pedal/pedal_diy.py, so anything the pedal refuses is refused here
+    first: ' Tremolo' and 'TREMOLO' are indistinguishable from 'Tremolo' on
+    the pedal's screen. INTERNAL spacing stays significant, so 'Tremolo AW'
+    is a visibly different name and builds fine (stock itself ships DuoTrem,
+    ORG Trem, TremDelay and Tremolo Rev alongside Tremolo without any of
+    them colliding)."""
+    return name.strip().casefold()
+
+
+STOCK_NAME_INDEX = {stock_name_key(n): n for n in STOCK_EFFECT_NAMES}
+
+
 def load_manifest(path: Path) -> dict:
     m = json.loads(path.read_text())
     problems = []
@@ -380,13 +529,64 @@ def load_manifest(path: Path) -> dict:
                 "reserved; set allow_any_id to override")
     if not re.fullmatch(r"[A-Z0-9_]{1,8}", m["filename"]):
         problems.append("filename must be 1-8 chars of A-Z 0-9 _")
+    # The 2-letter author-prefix rule (see AUTHOR_PREFIXES above). Only
+    # judged once filename and id are individually well-formed, so a broken
+    # manifest reports its real problem instead of a spurious prefix one.
+    author = m.setdefault("author", DEFAULT_AUTHOR)
+    if not isinstance(author, str):
+        problems.append("author must be a string (registry nickname)")
+    elif (re.fullmatch(r"[A-Z0-9_]{1,8}", m["filename"])
+            and re.fullmatch(r"[0-9a-fA-F]{8}", m["id"])):
+        entry = author_prefix_table().get(author.lower())
+        if entry is None:
+            problems.append(
+                f"author '{author}' has no registered filename prefix; "
+                "register a 2-letter prefix in ids/effect-authors.json "
+                "(docs/id-scheme.md)")
+        else:
+            prefix, aliases = entry
+            accepted = {prefix, *aliases}
+            playground = (int(m["id"], 16) & 0xFFFF) <= PLAYGROUND_LOW16_MAX
+            if playground:
+                accepted.add(PLAYGROUND_PREFIX)
+            if not m["filename"].startswith(tuple(accepted)):
+                problems.append(
+                    f"filename '{m['filename']}' must start with one of "
+                    f"{sorted(accepted)} for "
+                    + ("a playground id" if playground
+                       else "an id in an author range")
+                    + f" by author '{author}' (filename-uniqueness "
+                    "convention, docs/id-scheme.md)")
     if not (1 <= len(m["name"]) <= 10) or not m["name"].isascii():
         problems.append("name must be 1-10 ascii chars")
-    # param cap: 12 on cleanroom (the pedal-UI maximum, 4 knobs x 3
-    # pages; needs the 16-word _Coe), 9 on the bitcrush scaffold (its stock
-    # 12-word _Coe/48-B memcpy are untouched by the transform).
+    # Stock display-NAME collision (see STOCK_EFFECT_NAMES above). The escape
+    # hatch is an EXPLICIT manifest opt-out, shaped like allow_any_id:
+    # "allow_stock_name_collision": true builds the effect anyway and warns.
+    if not isinstance(m.setdefault("allow_stock_name_collision", False), bool):
+        problems.append("allow_stock_name_collision must be true or false")
+    stock_hit = STOCK_NAME_INDEX.get(stock_name_key(m["name"]))
+    if stock_hit is not None:
+        if m.get("allow_stock_name_collision") is True:
+            warn(f"name '{m['name']}' collides with the stock effect "
+                 f"'{stock_hit}'; building anyway because the manifest sets "
+                 "allow_stock_name_collision. The two cannot be told apart "
+                 "in the pedal's browser, and an EXACT stock-name match is "
+                 "still refused at install time by tools-pedal/pedal_diy.py")
+        else:
+            problems.append(
+                f"name '{m['name']}' collides with the stock effect "
+                f"'{stock_hit}': two effects with the same name cannot be "
+                "told apart in the pedal's browser, and "
+                "tools-pedal/pedal_diy.py refuses to install it. Rename it "
+                "(a distinguishing suffix is enough: 'Tremolo AW' does not "
+                'collide), or set "allow_stock_name_collision": true to '
+                "build it anyway (docs/id-scheme.md)")
+    # param cap: 10 on cleanroom (the default order [5..14] inside the
+    # 16-word _Coe; slots 2 and 3 are only reachable explicitly), 9 on the
+    # bitcrush scaffold (its stock 12-word _Coe/48-B memcpy are untouched by
+    # the transform).
     free_slots = (FREE_COEFF_SLOTS if m["scaffold"] == "cleanroom"
-                  else FREE_COEFF_SLOTS[:BITCRUSH_MAX_PARAMS])
+                  else BITCRUSH_COEFF_SLOTS[:BITCRUSH_MAX_PARAMS])
     if not (1 <= len(m["params"]) <= len(free_slots)):
         problems.append(f"1..{len(free_slots)} params supported on the "
                         f"{m['scaffold']} scaffold")
@@ -419,15 +619,22 @@ def load_manifest(path: Path) -> dict:
         else:
             problems.append(f"param '{nm}': smooth must be true/false or a "
                             "positive rate number")
-        # "slot": explicit coefficient slot (must be one of the
-        # scaffold's free slots; default = fill order, which starts at
-        # [3]). Stock smooths continuously-edited levels only into coeff[2],
-        # and the fill order never lands a single-param effect there, so this
-        # is the escape hatch when you want a specific slot.
+        # "slot": explicit coefficient slot (normally one of the scaffold's
+        # free slots; default = fill order, which starts at [5]). Slots 2
+        # and 3 are outside the default order on the cleanroom scaffold but
+        # can be asked for explicitly, with a warning: 3 is zeroed by the
+        # firmware at tuner close, 2 is the stock output-level convention.
         sl = p.get("slot")
-        if sl is not None and sl not in free_slots:
+        if sl is not None and sl in UNSAFE_DEFAULT_SLOTS \
+                and sl not in free_slots:
+            warn(f"param '{nm}': explicit slot {sl} is "
+                 f"{UNSAFE_DEFAULT_SLOTS[sl]}; building anyway because the "
+                 "manifest asked for it. A real user param belongs at slot 5 "
+                 "or above.")
+        elif sl is not None and sl not in free_slots:
             problems.append(f"param '{nm}': slot must be one of "
-                            f"{free_slots}")
+                            f"{free_slots} (or an explicit 2 or 3, which "
+                            "warns)")
         # "smooth_service": which ctx service word the smoothed handler
         # calls: 4 = the smooth service (stock VOL/Bal; default) or
         # 3 = the ramp service (identical 3-arg contract, docs/zd2-abi.md
@@ -499,6 +706,31 @@ def load_manifest(path: Path) -> dict:
         if len(nm) > VALUE_UI_CHARS:
             warn(f"param '{nm}': the NAME is {len(nm)} chars; the pedal "
                  f"truncates past {VALUE_UI_CHARS} unless selected")
+
+        # "footswitch_toggle": this param is the firmware's LATCH/UNLATCH
+        # footswitch-mode toggle (docs/building-effects.md "Footswitch").
+        # Its table entry gets the stock EXCITER/KKFLNG1U flags (w12 |=
+        # 0x8000 shown | 0x100000 marker, w13 = 0x02); the firmware reads
+        # the mode via the MultiFswTbl the top-level "footswitch" block
+        # emits. "trailing": true places it AFTER the UI stop (a pure
+        # firmware toggle, EXACTLY EXCITER-shaped), the only placement
+        # hardware has validated; a non-trailing footswitch_toggle (a UI
+        # selector carrying the flags) is hardware-DISPROVEN (the firmware
+        # ignores footswitch mode on a UI knob and the flags mis-parse into
+        # a phantom param), so use trailing: true.
+        if p.get("footswitch_toggle"):
+            if m.get("scaffold") != "cleanroom":
+                problems.append(f"param '{nm}': footswitch_toggle requires the "
+                                "cleanroom scaffold")
+            if not p.get("values"):
+                problems.append(f"param '{nm}': footswitch_toggle requires "
+                                "'values' (the LATCH/UNLATCH-style labels)")
+            if "footswitch" not in m:
+                problems.append(f"param '{nm}': footswitch_toggle requires a "
+                                "top-level 'footswitch' block")
+        if p.get("trailing") and not p.get("footswitch_toggle"):
+            problems.append(f"param '{nm}': 'trailing' only applies to a "
+                            "footswitch_toggle param")
 
         cv = p.get("curve")
         if cv is not None:
@@ -588,6 +820,33 @@ def load_manifest(path: Path) -> dict:
         if df and m.get("scaffold") != "cleanroom":
             problems.append("dll_fields requires the cleanroom scaffold")
     m["dll_fields"] = df
+    # Optional "footswitch": {"sub_word": <u32>, "slot": <0..3>}: emit the
+    # firmware footswitch-config (a 4-slot MultiFswTbl + a 1-word sub-table)
+    # and wire it into the Dll caller-struct at +8, replicating the stock
+    # EXCITER/BOMBER layout (docs/building-effects.md "Footswitch"; the
+    # effect code never reads it; the firmware does). Required for a
+    # `footswitch_toggle` param to actually change footswitch behavior.
+    # Hardware-validated 2026-07-25 (WfMerge v2.04 on an MS-70CDR+): the
+    # default sub_word 0x100 gives a working LATCH/UNLATCH (momentary)
+    # footswitch; other sub_word bitfields are stock-observed (LOOPROLL
+    # 0x104) but not decoded.
+    fsw = m.get("footswitch")
+    if fsw is not None:
+        if m.get("scaffold") != "cleanroom":
+            problems.append("footswitch requires the cleanroom scaffold")
+        elif not isinstance(fsw, dict):
+            problems.append("footswitch must be an object")
+        else:
+            sw = fsw.setdefault("sub_word", 0x00000100)
+            slot = fsw.setdefault("slot", 0)
+            if not isinstance(sw, int) or not (0 <= sw <= 0xFFFFFFFF):
+                problems.append("footswitch.sub_word must be a u32")
+            if not isinstance(slot, int) or not (0 <= slot <= 3):
+                problems.append("footswitch.slot must be 0..3 (the "
+                                "footswitch number)")
+            if not any(p.get("footswitch_toggle") for p in m["params"]):
+                problems.append("footswitch block requires a param with "
+                                "footswitch_toggle: true")
     # Optional big-kernel keys (cleanroom only). "kernel_section": "text"
     # places the kernel in .text instead of the 1472-B .audio convention,
     # stock-precedented (DELAY_C's audio fn is in .text; the big reverbs run
@@ -816,13 +1075,58 @@ def gen_params_header(m: dict) -> str:
     return "\n".join(lines)
 
 
+def param_table_flags(m: dict, p: dict) -> tuple:
+    """(w12, w13) for a param-table entry, accounting for the optional
+    footswitch-mode toggle (docs/building-effects.md "Footswitch").
+
+    Normal params: w12 = 0x16 on the LAST UI knob (the bit-0x02 UI stop),
+    0x10 otherwise; w13 = 0. This is byte-identical to the pre-footswitch
+    builder for any manifest with no footswitch param.
+
+    A "footswitch_toggle" param carries the stock EXCITER/KKFLNG1U flags
+    (w12 |= 0x100000 footswitch marker | 0x8000 shown-after-UI-stop;
+    w13 = 0x02). Two placements:
+      - "trailing": true  -> a post-UI-stop toggle (matches EXCITER's
+        `ON/OFF` = LATCH/UnLATCH exactly, 0x108004); excluded from the
+        UI-knob set, so the last real knob keeps the UI stop. This is the
+        hardware-validated placement.
+      - trailing absent    -> the toggle IS a UI knob too (0x118016 when
+        last). Hardware-DISPROVEN as a footswitch (the firmware ignores
+        the mode flags on a UI selector); kept only so the table shape is
+        expressible.
+    """
+    params = m["params"]
+    ui_knobs = [q for q in params if not q.get("trailing")]
+    is_last_ui = bool(ui_knobs) and p is ui_knobs[-1]
+    is_last_entry = p is params[-1]
+    has_trailing = any(q.get("trailing") for q in params)
+    if p.get("footswitch_toggle"):
+        w12 = 0x100000 | 0x8000
+        if not p.get("trailing"):                 # also a UI knob
+            w12 |= 0x10
+            if is_last_ui:
+                w12 |= 0x02                        # UI stop
+            if is_last_entry:
+                w12 |= 0x04                        # physical end
+        elif is_last_entry:
+            w12 |= 0x04                            # trailing toggle: physical end
+        return w12, 0x02
+    # Normal param. The last UI knob is the UI stop (bit 0x02); it is ALSO the
+    # table's physical end (bit 0x04) ONLY when no trailing footswitch param
+    # follows. With a trailing toggle the 0x04 must move to that toggle, or the
+    # pedal's param-table walk stops at the UI stop and never shows the toggle
+    # (stock EXCITER: VOL = 0x12 UI-stop, ON/OFF = 0x108004 physical-end).
+    if is_last_ui:
+        return (0x12 if has_trailing else 0x16), 0x00
+    return 0x10, 0x00
+
+
 def gen_table_entries(m: dict) -> str:
     out = []
-    last_index = m["params"][-1]["index"]
     for p in m["params"]:
         w0, w1, w2 = struct.unpack(
             "<3I", p["name"].encode("ascii").ljust(12, b"\0"))
-        w12 = 0x16 if p["index"] == last_index else 0x10
+        w12, w13 = param_table_flags(m, p)
         out += [
             f"           .word 0x{w0:08x}\t\t; param '{p['name']}' (user param)",
             f"           .word 0x{w1:08x}",
@@ -841,8 +1145,10 @@ def gen_table_entries(m: dict) -> str:
             "           .word 0x00000000",
             "           .word 0x00000000",
             f"           .word 0x{w12:08x}\t\t; w12"
-            + ("  (0b110 = LAST user param)" if w12 == 0x16 else ""),
-            "           .word 0x00000000",
+            + ("  (0b110 = LAST user param)" if w12 == 0x16
+               else "  (footswitch-mode toggle)" if w12 & 0x8000 else ""),
+            f"           .word 0x{w13:08x}"
+            + ("\t\t; w13 (footswitch-mode toggle)" if w13 else ""),
         ]
     return "\n".join(out)
 
@@ -1141,9 +1447,10 @@ def verify(m: dict, builddir: Path, report: list) -> None:
         assert e[3] == p["max"] and e[4] == p["default"] and e[5] == p["max"]
         assert e[7] == dm[f"Aw_P{p['index']}_edit"], \
             f"{p['name']}: handler pointer wrong"
-        want_w12 = 0x16 if p is m["params"][-1] else 0x10
+        want_w12, want_w13 = param_table_flags(m, p)
         assert e[12] == want_w12, f"{p['name']}: w12 {e[12]:#x} != {want_w12:#x}"
-        assert e[6] == e[8] == e[9] == e[10] == e[11] == e[13] == 0
+        assert e[13] == want_w13, f"{p['name']}: w13 {e[13]:#x} != {want_w13:#x}"
+        assert e[6] == e[8] == e[9] == e[10] == e[11] == 0
     # descriptor entry w7/w8 still point at init + audio fn
     desc = struct.unpack("<14I", const[0x38:0x70])
     assert desc[7] == dm[f"{anch.AUDIO_FN}_init"], "descriptor init ptr wrong"
@@ -1322,7 +1629,11 @@ def verify_cleanroom(m: dict, builddir: Path, report: list) -> None:
     e0 = entry(0)
     assert e0[0:3] == cr.pack_name_words("OnOff"), "entry 0 name != OnOff"
     assert e0[3] == 1 and e0[7] == symtab[f"Fx_SFX_{s}_onf"], "entry 0 wrong"
-    assert all(v == 0 for i, v in enumerate(e0) if i not in (0, 1, 3, 7))
+    # OnOff w12 = 0x80000 footswitch special-function marker (footswitch
+    # effects only); 0 otherwise (docs/building-effects.md "Footswitch")
+    onoff_w12 = 0x00080000 if m.get("footswitch") else 0
+    assert e0[12] == onoff_w12, f"entry 0 w12 {e0[12]:#x} != {onoff_w12:#x}"
+    assert all(v == 0 for i, v in enumerate(e0) if i not in (0, 1, 3, 7, 12))
     e1 = entry(1)
     assert e1[0:3] == cr.pack_name_words(m["name"][:12]), "entry 1 name wrong"
     assert e1[3] == 0xFFFFFFFF and e1[5] == 1, "entry 1 sentinel/w5 wrong"
@@ -1337,9 +1648,10 @@ def verify_cleanroom(m: dict, builddir: Path, report: list) -> None:
         assert e[3] == p["max"] and e[4] == p["default"] and e[5] == p["max"]
         assert e[7] == symtab[f"Aw_P{p['index']}_edit"], \
             f"{p['name']}: handler pointer wrong"
-        want_w12 = 0x16 if p is m["params"][-1] else 0x10
+        want_w12, want_w13 = param_table_flags(m, p)
         assert e[12] == want_w12, f"{p['name']}: w12 {e[12]:#x} != {want_w12:#x}"
-        assert e[6] == e[8] == e[10] == e[11] == e[13] == 0
+        assert e[13] == want_w13, f"{p['name']}: w13 {e[13]:#x} != {want_w13:#x}"
+        assert e[6] == e[8] == e[10] == e[11] == 0
         # w9 = value-display fn for a selector, else 0 (host renders the int)
         if p.get("values"):
             assert e[9] == symtab[f"Aw_P{p['index']}_str"], \
