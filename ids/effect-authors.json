@@ -31,6 +31,14 @@
       "status": "assigned",
       "url": "https://github.com/thammer/stomphacks",
       "note": "For effects I distribute. The effects in this repo are examples and stay in the playground (0x...1000..0x...1030), not in this range."
+    },
+    {
+      "nickname": "Leemuzhko",
+      "name": "Alexander Lim",
+      "low16": "0x3000-0x33ff",
+      "prefix": "LM",
+      "status": "assigned",
+      "url": "https://github.com/Leemuzhko"
     }
   ]
 }

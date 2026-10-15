@@ -226,9 +226,9 @@ policy is in [docs/ip-and-licensing.md](docs/ip-and-licensing.md).
   blank icon in its edit window (the params are still editable there). The
   pedal itself is unaffected. Whether that is caused by the zeroed fields or
   is true of any DIY effect is untested.
-* Effect IDs. There is a DIY ID page you can pick from
-  ([docs/effect-ids.md](docs/effect-ids.md)), but no community registry yet, so
-  two authors picking by hand can still collide. A shared scheme is unsettled.
+* Effect IDs. The scheme is a proposal, not a settled standard. Two authors
+  who pick ids by hand, without a range from
+  [ids/effect-authors.json](ids/effect-authors.json), can still collide.
 
 ## Useful links
 
