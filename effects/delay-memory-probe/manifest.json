@@ -1,0 +1,25 @@
+{
+  "name": "Mem Probe",
+  "filename": "XXMEMTST",
+  "id": "07001040",
+  "version": "1.00",
+  "display": "MEM PROBE",
+  "badge": "TEST",
+  "description": "Experimental read-only instance[3] descriptor probe; outputs audio telemetry. NOT hardware tested.",
+  "dspload": 10,
+  "kernel": "probe.c",
+  "state_bytes": 64,
+  "scaffold": "cleanroom",
+  "kernel_section": "text",
+  "allow_stack": true,
+  "opt_for_space": null,
+  "params": [
+    {
+      "name": "Level",
+      "max": 100,
+      "default": 80,
+      "curve": "stock_vol",
+      "explanation": "FSK telemetry amplitude. 80 is default. Keep effect enabled."
+    }
+  ]
+}
