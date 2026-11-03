@@ -85,12 +85,16 @@ def describe(p):
               f"CRC-valid observations: {p['observations']}"]
     if p["status"] == 0:
         usable = max(0, end - ((base + 7) & ~7))
-        fields += [f"span: {end-base} bytes", f"span matches size: {end>base and end-base==size}",
-                   f"4-byte pointer/base alignment: {(p['pointer']&3)==0 and (base&3)==0}",
+        span_ok = end > base and end - base == size
+        addresses_aligned = all((value & 3) == 0 for value in (p["pointer"], base, end))
+        size_aligned = (size & 3) == 0
+        fields += [f"span: {end-base} bytes", f"span matches size: {span_ok}",
+                   f"4-byte pointer/base/end alignment: {addresses_aligned}",
+                   f"4-byte size alignment: {size_aligned}",
                    f"usable from 8-byte alignment: {usable} bytes",
                    f"32 KiB fits: {usable>=32768}",
                    "Values alone DO NOT prove writable, independent or persistent memory"]
-        if not (end > base and end-base == size and (base&3) == 0):
+        if not (span_ok and addresses_aligned and size_aligned):
             fields.append("WARNING: inconsistent descriptor; DO NOT access buffer")
     return "\n".join(fields)
 
