@@ -2,6 +2,7 @@
   "name": "Mem Probe",
   "filename": "XXMEMTST",
   "id": "07001040",
+  "author": "joolsa",
   "version": "1.00",
   "display": "MEM PROBE",
   "badge": "TEST",
