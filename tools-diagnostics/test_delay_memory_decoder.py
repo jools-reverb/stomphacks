@@ -6,7 +6,7 @@ import unittest
 import wave
 import zlib
 from pathlib import Path
-from decode_delay_memory import SYNC, SYMBOL, decode_samples, read_wav, RATE
+from decode_delay_memory import SYNC, SYMBOL, decode_samples, describe, read_wav, RATE
 
 def c_crc(data):
     crc = 0xffffffff
@@ -33,6 +33,31 @@ class ProbeDecoderTests(unittest.TestCase):
         samples = [x + rng.uniform(-0.02, 0.02) for x in samples]
         p = decode_samples(samples)[0]
         self.assertEqual([p[k] for k in ("pointer", "base", "end", "size_bytes", "status")], data)
+
+    def test_descriptor_alignment(self):
+        valid = dict(pointer=0x800000, base=0x900000, end=0x910000,
+                     size_bytes=65536, status=0, observations=1)
+        output = describe(valid)
+        self.assertIn("4-byte pointer/base/end alignment: True", output)
+        self.assertIn("4-byte size alignment: True", output)
+        self.assertNotIn("WARNING:", output)
+
+        for field in ("pointer", "base", "end", "size_bytes"):
+            with self.subTest(field=field):
+                invalid = dict(valid)
+                invalid[field] += 2
+                output = describe(invalid)
+                self.assertIn("WARNING: inconsistent descriptor", output)
+                addresses_ok = field == "size_bytes"
+                size_ok = field != "size_bytes"
+                self.assertIn(f"4-byte pointer/base/end alignment: {addresses_ok}", output)
+                self.assertIn(f"4-byte size alignment: {size_ok}", output)
+
+        # A matching range and byte count are insufficient if both are unaligned.
+        invalid = dict(valid, end=valid["end"] + 2, size_bytes=valid["size_bytes"] + 2)
+        output = describe(invalid)
+        self.assertIn("span matches size: True", output)
+        self.assertIn("WARNING: inconsistent descriptor", output)
 
     def test_null(self):
         self.assertEqual(decode_samples(generate([0,0,0,0,1]))[0]["status"], 1)
