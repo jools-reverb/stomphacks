@@ -1,6 +1,6 @@
 # Hardware results
 
-**Initial tester-reported capture plus eight inspected Stage D recordings logged.** Append records without rewriting observations. The Stage D WAVs and current build report were directly inspected; missing evidence for Capture 1 remains unchanged.
+**Initial tester-reported capture, eight inspected Stage D recordings and the Stage E bounded-write/retention pass logged.** Append records without rewriting observations. The Stage D WAVs and current build report were directly inspected; missing evidence for Capture 1 remains unchanged.
 
 ## Capture 1 — probe only; report received 2026-11-04
 
@@ -97,7 +97,7 @@ Recording SHA-256 hashes and detailed evidence are retained in the [planning res
 
 ## Stage E — off-device preparation
 
-No Stage E installation or hardware recording has been performed. The separate MEM WRITE probe (`XXMEMWR`, ID `07001050`) is implemented and built; sample-memory accessibility, writability, retention and isolation remain hardware-unverified.
+At off-device preparation, no Stage E installation or hardware recording had been performed. The separate MEM WRITE probe (`XXMEMWR`, ID `07001050`) was implemented and built; sample-memory accessibility, writability, retention and isolation were then hardware-unverified.
 
 - TI C6000 8.5.0 LTS build and all report checks pass, with no calls in the audio kernel
 - Shared C logic passes 41 desktop fault-injection scenarios with address and undefined-behaviour sanitizers, a 184-byte state and a maximum of sixteen sample-memory accesses per callback
@@ -107,7 +107,30 @@ No Stage E installation or hardware recording has been performed. The separate M
 - Preserved ZIC SHA-256: `55371ce4047f5debfebd20837d1ccc6fc7aac88fff779c596e33257b98587922`
 - Exact artifacts, source snapshots and checksums are under ignored `build/stage-e-2026-11-14/artifact/`
 
-Detailed off-device evidence, limitations and tester commands are in [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md). These are preparation results, not a Stage E hardware pass.
+Detailed off-device evidence and subsequent hardware results are in [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md). These are preparation results, not a Stage E hardware pass.
+
+## Stage E — E1 bounded-write and retention capture; 2026-11-14
+
+- **Outcome:** all five phases pass; decoder reports `complete_pass`, with no issues or missing required evidence
+- **Device/session:** tester's MS-70CDR+; the retained cleanup-session identity file reports firmware 1.20, with no separately retained identity snapshot from recording time
+- **Artifact:** MEM WRITE, `XXMEMWR.ZD2`, ID `07001050`, source/tool commit `1ccc215d1eafbab17568cfecddecfa9a68a2cb0f`; upload SHA-256 `330a49b902cf9303625327bab4b65b8794c5fcd92366aa1c2ffb33a16732b542`
+- **Installation:** local operation log records install DONE at 22:41:49; independently compared `readback/installed.ZD2` is byte-identical to the preserved upload
+- **Conditions:** the prescribed setup was a fresh probe-only unsaved scratch patch, Level 80 and Enable 0 then 1; exact physical settings, initial autosave confirmation and backup completion were not independently audited from complete console evidence
+- **Recording:** `build/stage-e-2026-11-14/recordings/E1-bounded-write.wav`, mono 16-bit integer PCM, 44100 Hz, 8280475 frames, 187.765873 seconds; peak 0.64855957 full scale with no full-scale endpoint samples
+- **WAV SHA-256:** `aad65c3172ccea7123b20efd089a73f17fd3cd9018969574b8a1e29a1f5b567c`
+- **JSON SHA-256:** `096cad2f75fd3a7bd8034762c7da607965ece6e51a9e8e5eeef9bfd23f393f3a`; an independent full-WAV decode exactly matches the tester's JSON content
+- **Descriptor:** pointer `0xc02758a8`, base `0xc0378000`, exclusive end `0xc0424440`, size 705600 bytes; no pointer/field change detected during the probe's active checks
+- **Tested head:** `[0xc0378000, 0xc0380000)`, 32768 bytes, reached through 16-, 256-, 4096- and 32768-byte prefixes with both immediate and delayed pattern comparisons
+- **Tested tail:** `[0xc0424430, 0xc0424440)`, 16 bytes, both patterns passed while the entire head B pattern remained unchanged
+- **Joint retention:** at least ten seconds without writes, followed by successful tail/head/tail verification
+- **Telemetry:** 44 distinct consecutive packets, sequences 0–43; two reports for each intermediate phase and 27 terminal PASS packets, mask `0x1f`, head high-water 32768, error zero, failure offset `0xffffffff`
+- **Timing:** terminal completion at 2430112 processed frames, 55.104580 seconds after Enable; first terminal transmission begins around 83.886803 seconds into the recording
+- **Search counts:** 650 CRC-valid observations, nine rejected and fifteen truncated-sync observations; search observations are not physical packet counts or memory failures
+- **Cleanup:** tester explicitly confirmed removal; local operation log records uninstall DONE at 23:08:46 using the preserved local artifact; no captured ABSENT response was available for independent inspection
+
+**Evidence level:** directly inspected WAV, independent decoder output and installed readback comparison, with tester-confirmed removal supported by the local uninstall log. Successful access and retention are established only for these two tested regions in this run. Frozen terminal repeats do not extend retention measurements. Cross-instance isolation, the untested middle, int16-ring correctness and measured DSP load remain unresolved. No repeat is required for this bounded experiment.
+
+Detailed phase data, evidence limitations and retained artifact references are in [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md). Stage F has not started.
 
 ## Capture template
 

@@ -1,10 +1,10 @@
 # Bounded memory probe
 
-Experimental MEM WRITE (`XXMEMWR`, playground ID `07001050`). Not hardware verified. Read [SAFETY.md](../../SAFETY.md) before installation. Use only in a probe-only unsaved scratch patch.
+Experimental MEM WRITE (`XXMEMWR`, playground ID `07001050`). One bounded hardware run passed all five phases; see [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md) for the exact artifact, recording and limits. Removal was confirmed by the tester. Read [SAFETY.md](../../SAFETY.md) before installation. Use only in a probe-only unsaved scratch patch.
 
 The effect starts disabled. Keep Level at 80, observe Enable 0, then set Enable to 1 while the effect is fully on. A fresh instance already set to 1 cannot start until it observes 0 then 1. A running test aborts when Enable returns to 0, the bypass fade leaves 1, or valid coefficients resume after an invalid interval. Success and failure are permanent until reinitialisation; changing Enable cannot restart them.
 
-The probe validates a fixed descriptor tuple, tests head prefixes of 16, 256, 4096 and 32768 bytes, tests the last 16 bytes, then checks joint retention. Every failure stops sample-memory accesses. The tested regions are `[0xc0378000, 0xc0380000)` and `[0xc0424430, 0xc0424440)`. This is an experimental test of those regions, not evidence of usable memory until measured on hardware.
+The probe validates a fixed descriptor tuple, tests head prefixes of 16, 256, 4096 and 32768 bytes, tests the last 16 bytes, then checks joint retention. Every failure stops sample-memory accesses. The tested regions are `[0xc0378000, 0xc0380000)` and `[0xc0424430, 0xc0424440)`. The completed run demonstrated access and retention for those regions; it did not establish usability of the entire allocation or cross-instance isolation.
 
 ## Implementation
 
