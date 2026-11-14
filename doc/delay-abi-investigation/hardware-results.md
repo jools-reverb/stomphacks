@@ -95,6 +95,20 @@ usable from 8-byte alignment: 705600 bytes
 
 Recording SHA-256 hashes and detailed evidence are retained in the [planning results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-d-results.md); local machine-readable decoder output is `build/stage-d-2026-11-11/analysis.json`. Private backups and generated binaries are not committed.
 
+## Stage E — off-device preparation
+
+No Stage E installation or hardware recording has been performed. The separate MEM WRITE probe (`XXMEMWR`, ID `07001050`) is implemented and built; sample-memory accessibility, writability, retention and isolation remain hardware-unverified.
+
+- TI C6000 8.5.0 LTS build and all report checks pass, with no calls in the audio kernel
+- Shared C logic passes 41 desktop fault-injection scenarios with address and undefined-behaviour sanitizers, a 184-byte state and a maximum of sixteen sample-memory accesses per callback
+- Twelve decoder tests pass, including the existing Stage D suite; a synthetic complete recording decodes nineteen physical packets and three terminal PASS packets
+- Installer mock self-test passes, with its stock-corpus refusal subcheck skipped because its expected directory is absent; local classification is DIY-OK
+- Preserved ZD2 SHA-256: `330a49b902cf9303625327bab4b65b8794c5fcd92366aa1c2ffb33a16732b542`
+- Preserved ZIC SHA-256: `55371ce4047f5debfebd20837d1ccc6fc7aac88fff779c596e33257b98587922`
+- Exact artifacts, source snapshots and checksums are under ignored `build/stage-e-2026-11-14/artifact/`
+
+Detailed off-device evidence, limitations and tester commands are in [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md). These are preparation results, not a Stage E hardware pass.
+
 ## Capture template
 
 - Date, firmware version, model:

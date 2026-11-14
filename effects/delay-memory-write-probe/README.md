@@ -1,47 +1,41 @@
-# MS-70CDR+ delay-memory descriptor probe
+# Bounded memory probe
 
-**Experimental: C kernel not yet built with TI cl6x or run on a pedal.** Read [SAFETY.md](../../SAFETY.md) completely before any hardware testing. The original Stomphacks gain effect remains unchanged.
+Experimental MEM WRITE (`XXMEMWR`, playground ID `07001050`). Not hardware verified. Read [SAFETY.md](../../SAFETY.md) before installation. Use only in a probe-only unsaved scratch patch.
 
-## Behaviour
+The effect starts disabled. Keep Level at 80, observe Enable 0, then set Enable to 1 while the effect is fully on. A fresh instance already set to 1 cannot start until it observes 0 then 1. A running test aborts when Enable returns to 0, the bypass fade leaves 1, or valid coefficients resume after an invalid interval. Success and failure are permanent until reinitialisation; changing Enable cannot restart them.
 
-On the first audio callback after valid initialisation, read `instance[3]`. A null pointer produces status 1; a non-four-byte-aligned pointer produces status 2. Otherwise **immediately read the first three 32-bit words** and report status 0. There is no separate pointer-only binary. The fields are interpreted as base address, exclusive end and size in **bytes**. This test does not access the buffer pointed to by base, nor write to any delay sample memory. A non-null aligned pointer could still be unmapped and cause a DSP crash.
+The probe validates a fixed descriptor tuple, tests head prefixes of 16, 256, 4096 and 32768 bytes, tests the last 16 bytes, then checks joint retention. Every failure stops sample-memory accesses. The tested regions are `[0xc0378000, 0xc0380000)` and `[0xc0424430, 0xc0424440)`. This is an experimental test of those regions, not evidence of usable memory until measured on hardware.
 
-A 7-word packet is repeated on both output channels. Each 32-bit word is transmitted least-significant-bit first:
-1. Sync `0xA71D5C3E`
-2. `instance[3]` descriptor address
-3. `base`
-4. `end`
-5. `size_bytes`
-6. Status (0 read, 1 null, 2 misaligned)
-7. IEEE CRC-32 over words 2–6 in little-endian byte order
+## Implementation
 
-Each bit is a 256-sample square-wave symbol at 44.1 kHz: a zero uses a 32-sample period (1,378.125 Hz), a one a 16-sample period (2,756.25 Hz). Packet duration is approximately 1.30 seconds, repeated continuously. The existing gain example's init guard and finite audio-output clamp patterns are retained.
+- `probe.c` adapts the host pointers and coefficients and emits finite FSK on both output channels
+- `step.inc`, `packet.inc` and `transmitted.inc` are included directly into the leaf kernel and the desktop harness, with no function-call boundary
+- `state.h` defines 184 bytes of per-instance state, including one 80-byte immutable packet, within a 188-byte allowance plus the generated guard
+- Sample-memory operations are volatile 32-bit words, limited to sixteen accesses per callback
+- Each packet has twenty words, sync `0xa71e5c3e`, version 1 and IEEE reflected CRC-32; CRC work is limited to one word per callback
+- The kernel must contain no calls, including compiler-generated helpers; `allow_stack=true` does not waive this rule
+- Bypass detection requires a callback that observes a fade below 1; a host suspension that hides the whole transition is not detectable through this coefficient
 
-## Off-device build
+## Offline checks
 
-First follow [Stomphacks building instructions](../../docs/building-effects.md) to install TI C6000 Code Generation Tools 8.5.0, Python requirements and the `zoom-zt2/` checkout. Then, from the repository root:
-
-```sh
-.venv/bin/python3 tools/zd2_make_effect.py effects/delay-memory-probe/manifest.json
-```
-
-Inspect **every** check in `effects/delay-memory-probe/build/REPORT.md`. The manifest uses the documented `kernel_section=text` and `allow_stack=true` options because telemetry is larger than the ordinary gain effect. They have not yet been compiled/validated for this kernel.
-
-Identity: playground SFX ID `07001040`, filename `XXMEMTST`. Ensure neither identity collides with something already installed, and never distribute saved patches referring to this playground ID.
-
-## Decode
+Run from the Stomphacks root:
 
 ```sh
+python3 tools-diagnostics/verify_memory_write.py build/memory-write-check
 python3 -m unittest discover -s tools-diagnostics -p 'test_*.py' -v
-python3 tools-diagnostics/decode_delay_memory.py capture.wav
+ZOOM_TI_CGT=/Users/dev-vm/Applications/ti/ccs2101/ccs/tools/compiler/ti-cgt-c6000_8.5.0.LTS .venv/bin/python3 tools/zd2_make_effect.py effects/delay-memory-write-probe/manifest.json
 ```
 
-Capture four or more seconds of clean output from an enabled probe to an **uncompressed integer PCM WAV**, ideally at 44.1 kHz (48 kHz is supported). Use either stereo channel. Keep Level at the default of 80 and avoid clipping. The Python decoder checks sync and CRC before accepting a packet. A zero or inconsistent capacity must not trigger speculative memory accesses.
+The harness requires a C99 compiler supporting AddressSanitizer and UndefinedBehaviorSanitizer. It injects faults, checks boundaries and access budgets, and generates a synthetic PCM recording for the separate decoder. Desktop checks do not verify hardware memory access or DSP load. Inspect every build-report item and the generated kernel before hardware use.
 
-## Device safety
+## Recording and decoding
 
-Follow [SAFETY.md](../../SAFETY.md): use `tools-pedal/safe_connect.py` and confirm autosave OFF and a stock-only saved patch; back up everything using `tools-pedal/backup_pedal.py`; run `tools-pedal/pedal_diy.py classify effects/delay-memory-probe/build/XXMEMTST.ZD2` before installing. Use `tools-pedal/pedal_diy.py install` with the companion ZIC, then follow the documented readback/byte comparison steps. Test **only in an unsaved scratch patch**; never save experimental code into a patch. Uninstall after the session.
+Start recording before selecting the fresh effect, then record 120 seconds after enabling. Use integer PCM WAV, preferably 44.1 kHz; one channel is sufficient. Keep the chain, Level, Enable and bypass unchanged during the run.
 
-**If any file transfer stalls, DO NOT POWER-CYCLE.** Keep the pedal powered and follow `pedal_diy.py rescue` as specified in SAFETY.md; recovery is not guaranteed.
+```sh
+python3 tools-diagnostics/decode_memory_write.py capture.wav --json
+```
 
-Log observations using [hardware-results.md](../../doc/delay-abi-investigation/hardware-results.md), and follow the [hardware test plan](https://github.com/jools-reverb/zoom-midiverb-planning/blob/main/doc/delay-abi-investigation/hardware-test-plan.md). No hardware outcomes have been collected.
+The decoder preserves timestamps and packet sequence, separates search observations from physical transmissions, and reports missing intermediate evidence and resets. A missing terminal packet is inconclusive. A complete pass requires both region tests and the expected phase reports, with two distinct terminal packets.
+
+Installation, exact preserved artifacts and session instructions are in the [Stage E results](../../../zoom-midiverb-planning/doc/delay-abi-investigation/stage-e-results.md). Never save the effect in a patch. Uninstall using the preserved local artifact at the end of the session and verify absence. If a transfer fails, keep the pedal powered and follow the rescue instructions in SAFETY.md.
