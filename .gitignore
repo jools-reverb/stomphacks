@@ -14,3 +14,5 @@ zoom-zt2/
 *.ZIR
 *.out
 *.code
+
+.DS_Store

@@ -1,0 +1,31 @@
+{
+  "name": "Mem Write",
+  "filename": "XXMEMWR",
+  "id": "07001050",
+  "version": "1.00",
+  "display": "MEM WRITE",
+  "badge": "TEST",
+  "description": "Experimental bounded memory access and retention probe with explicit Enable control; not hardware verified.",
+  "dspload": 20,
+  "kernel": "probe.c",
+  "state_bytes": 188,
+  "scaffold": "cleanroom",
+  "kernel_section": "text",
+  "allow_stack": true,
+  "opt_for_space": null,
+  "params": [
+    {
+      "name": "Level",
+      "max": 100,
+      "default": 80,
+      "curve": "stock_vol",
+      "explanation": "FSK telemetry amplitude. 80 is default. Keep effect enabled."
+    },
+    {
+      "name": "Enable",
+      "max": 1,
+      "default": 0,
+      "explanation": "Set 0 then 1 while fully on to start once. Set 0 to abort."
+    }
+  ]
+}
